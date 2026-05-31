@@ -1,0 +1,10 @@
+# Compiled Emacs Lisp files
+*.elc
+
+# Backup and autosave files
+*~
+\#*\#
+.#*
+
+# Undo-tree history files
+.*.~undo-tree~

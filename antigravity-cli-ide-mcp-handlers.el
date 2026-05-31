@@ -1,0 +1,725 @@
+;;; antigravity-cli-ide-mcp-handlers.el --- MCP tool handlers for Antigravity CLI IDE  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026
+
+;; Author: Yoav Orot (Adapted for Antigravity CLI)
+;; Keywords: ai, antigravity, mcp
+
+;; This file is not part of GNU Emacs.
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; This file contains the MCP tool handler implementations for Antigravity CLI IDE.
+;; These handlers implement the actual functionality that Antigravity can invoke
+;; through the MCP protocol.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'json)
+(require 'ediff)
+(require 'antigravity-cli-ide-diagnostics)
+(require 'antigravity-cli-ide-debug)
+
+(declare-function antigravity-cli-ide-mcp-complete-deferred "antigravity-cli-ide-mcp" (session method result &optional unique-key))
+(declare-function antigravity-cli-ide-mcp--get-current-session "antigravity-cli-ide-mcp" ())
+(declare-function antigravity-cli-ide-mcp--get-session-for-project "antigravity-cli-ide-mcp" (project-dir))
+(declare-function antigravity-cli-ide-mcp--get-buffer-project "antigravity-cli-ide-mcp" ())
+(declare-function antigravity-cli-ide-mcp-session-active-diffs "antigravity-cli-ide-mcp" (session))
+(declare-function antigravity-cli-ide-mcp-session-original-tab "antigravity-cli-ide-mcp" (session))
+(declare-function antigravity-cli-ide-mcp-session-project-dir "antigravity-cli-ide-mcp" (session))
+(declare-function antigravity-cli-ide-mcp--setup-buffer-cache-hooks "antigravity-cli-ide-mcp" ())
+(declare-function antigravity-cli-ide--get-buffer-name "antigravity-cli-ide" (&optional directory))
+(declare-function antigravity-cli-ide--display-buffer-in-side-window "antigravity-cli-ide" (buffer))
+(defvar ediff-control-buffer)
+(defvar ediff-window-setup-function)
+(defvar ediff-split-window-function)
+(defvar ediff-control-buffer-suffix)
+(defvar antigravity-cli-ide-mcp--sessions)
+(defvar antigravity-cli-ide-show-antigravity-window-in-ediff)
+(defvar antigravity-cli-ide-focus-antigravity-after-ediff)
+(defvar antigravity-cli-ide-switch-tab-on-ediff)
+(defvar antigravity-cli-ide-use-ide-diff)
+(defvar antigravity-cli-ide-enable-execute-code)
+
+;;; Tool Registry - Define variables first to ensure they're available
+
+(defvar antigravity-cli-ide-mcp-tools nil
+  "Alist of tool names to handler functions.")
+
+(defvar antigravity-cli-ide-mcp-tool-schemas nil
+  "Tool input schemas for MCP protocol.")
+
+(defvar antigravity-cli-ide-mcp-tool-descriptions nil
+  "Tool descriptions for MCP protocol.")
+
+;;; Constants
+
+(defconst antigravity-cli-ide-mcp-handlers-idle-timer-delay 0
+  "Delay in seconds for idle timer when deferring responses.")
+
+;;; Helper Functions
+
+(defun antigravity-cli-ide-mcp--find-session-for-file (file-path)
+  "Find the MCP session that owns FILE-PATH.
+Returns the session if found, nil otherwise."
+  (let ((expanded-file (expand-file-name file-path))
+        (found-session nil))
+    (catch 'found
+      (maphash (lambda (project-dir session)
+                 (when (string-prefix-p (expand-file-name project-dir)
+                                        expanded-file)
+                   (setq found-session session)
+                   (throw 'found t)))
+               antigravity-cli-ide-mcp--sessions))
+    found-session))
+
+(defun antigravity-cli-ide-mcp--find-antigravity-side-window ()
+  "Find the Antigravity CLI side window in the current frame.
+Returns the window if found, nil otherwise."
+  (let ((antigravity-buffer-name (antigravity-cli-ide--get-buffer-name)))
+    (cl-find-if (lambda (window)
+                  (and (window-parameter window 'window-side)
+                       (equal (buffer-name (window-buffer window))
+                              antigravity-buffer-name)))
+                (window-list))))
+
+(defun antigravity-cli-ide-mcp--get-active-diffs (&optional session)
+  "Get the active diffs hash table for the current session.
+If SESSION is provided, use it instead of looking up the current session."
+  (if session
+      (antigravity-cli-ide-mcp-session-active-diffs session)
+    (if-let ((current-session (antigravity-cli-ide-mcp--get-current-session)))
+        (antigravity-cli-ide-mcp-session-active-diffs current-session)
+      ;; No session found - return nil
+      nil)))
+
+(defun antigravity-cli-ide-mcp--create-diff-buffers (old-file-path new-file-contents tab-name)
+  "Create buffers for diff comparison.
+OLD-FILE-PATH is the path to the original file.
+NEW-FILE-CONTENTS is the new content to diff against.
+TAB-NAME is used for naming the new buffer.
+Returns a cons cell (buffer-A . buffer-B)."
+  (let ((file-exists (file-exists-p old-file-path))
+        buffer-A buffer-B)
+    ;; Create or find buffer A (original file)
+    (if file-exists
+        ;; File exists - use it
+        (setq buffer-A (find-file-noselect old-file-path))
+      ;; New file - create empty buffer
+      (setq buffer-A (generate-new-buffer (format "*New file: %s*"
+                                                  (file-name-nondirectory old-file-path))))
+      (with-current-buffer buffer-A
+        (setq buffer-file-name old-file-path)))
+
+    ;; Create buffer B (new content)
+    (setq buffer-B (generate-new-buffer (format "*%s*" tab-name)))
+    (with-current-buffer buffer-B
+      (insert new-file-contents)
+      ;; Set the mode based on the file extension
+      (let ((mode (assoc-default old-file-path auto-mode-alist 'string-match)))
+        (when mode
+          (condition-case err
+              (funcall mode)
+            (error
+             ;; If mode activation fails (e.g., syntax errors), use fundamental-mode
+             (antigravity-cli-ide-debug "Failed to activate %s for diff buffer: %s. Using fundamental-mode."
+                                    mode (error-message-string err))
+             (fundamental-mode))))))
+
+    (cons buffer-A buffer-B)))
+
+(defun antigravity-cli-ide-mcp--setup-diff-hooks (tab-name session saved-winconf)
+  "Set up ediff hooks for TAB-NAME with SESSION and SAVED-WINCONF.
+Returns a cons cell (before-setup-hook-fn . startup-hook-fn)."
+  (let* ((captured-tab-name tab-name)
+         (captured-session session)
+         (captured-winconf saved-winconf)
+         (before-setup-hook-fn nil)
+         (startup-hook-fn nil))
+
+    ;; Define the before-setup hook function
+    (setq before-setup-hook-fn
+          (lambda ()
+            ;; Remove this hook after use
+            (remove-hook 'ediff-before-setup-hook before-setup-hook-fn)))
+
+    ;; Define the startup hook function with lexical closure
+    (setq startup-hook-fn
+          (lambda ()
+            (antigravity-cli-ide-mcp--handle-ediff-startup
+             captured-tab-name captured-session captured-winconf startup-hook-fn)))
+
+    (cons before-setup-hook-fn startup-hook-fn)))
+
+(defun antigravity-cli-ide-mcp--handle-ediff-startup (tab-name session saved-winconf startup-hook-fn)
+  "Handle ediff startup for TAB-NAME with SESSION and SAVED-WINCONF.
+STARTUP-HOOK-FN is the hook function to remove after use."
+  ;; Capture the control buffer and store it in diff-info
+  (when ediff-control-buffer
+    ;; Store the control buffer in our diff-info
+    (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session))
+          (control-buffer ediff-control-buffer))
+      (when-let ((diff-info (gethash tab-name active-diffs)))
+        (setf (alist-get 'control-buffer diff-info) control-buffer)
+        (puthash tab-name diff-info active-diffs)))
+
+    (with-current-buffer ediff-control-buffer
+      ;; Set up quit hook with captured values in lexical closure
+      (setq-local ediff-quit-hook
+                  (list (lambda ()
+                          ;; Check if this quit was initiated by Antigravity
+                          (let* ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session))
+                                 (diff-info (gethash tab-name active-diffs))
+                                 (quit-from-antigravity (alist-get 'quit-from-antigravity diff-info)))
+                            (unless quit-from-antigravity
+                              ;; Only handle quit if not initiated by Antigravity
+                              (antigravity-cli-ide-mcp--handle-ediff-quit
+                               tab-name
+                               session)))
+                          ;; Always restore window configuration
+                          (when saved-winconf
+                            (condition-case nil
+                                (set-window-configuration saved-winconf)
+                              (error nil)))))))
+
+    ;; Jump to the first difference if there are any
+    (ignore-errors (ediff-next-difference))
+
+    ;; Save the current window before any operations
+    (let ((original-window (selected-window))
+          (antigravity-window nil))
+      ;; Restore Antigravity side window only if user wants it shown during ediff
+      (when antigravity-cli-ide-show-antigravity-window-in-ediff
+        (when-let* ((project-dir (antigravity-cli-ide-mcp-session-project-dir session))
+                    (antigravity-buffer-name (antigravity-cli-ide--get-buffer-name project-dir))
+                    (antigravity-buffer (get-buffer antigravity-buffer-name)))
+          (when (buffer-live-p antigravity-buffer)
+            ;; Display Antigravity buffer in side window and save the window
+            (setq antigravity-window (antigravity-cli-ide--display-buffer-in-side-window antigravity-buffer)))))
+
+      ;; Handle focus based on user preference
+      (cond
+       ;; If user wants Antigravity window focus and it's visible, select it
+       ((and antigravity-cli-ide-focus-antigravity-after-ediff antigravity-window)
+        (select-window antigravity-window))
+       ;; Otherwise, restore the original window (which might be one of the ediff windows)
+       (t
+        (select-window original-window))))
+
+    ;; Remove this startup hook after use
+    (remove-hook 'ediff-startup-hook startup-hook-fn)))
+
+;;; Tool Handler Functions
+
+(defun antigravity-cli-ide-mcp-handle-open-file (arguments)
+  "Open a file with optional text selection.
+ARGUMENTS should contain:
+- `filePath': File path to open
+- `startLine' (optional): Start line for selection
+- `endLine' (optional): End line for selection
+- `startText' (optional): Start text pattern for selection
+- `endText' (optional): End text pattern for selection"
+  (let ((path (alist-get 'filePath arguments))
+        (start-line (alist-get 'startLine arguments))
+        (end-line (alist-get 'endLine arguments))
+        (start-text (alist-get 'startText arguments))
+        (end-text (alist-get 'endText arguments)))
+    (unless path
+      (signal 'mcp-error '("Missing required parameter: filePath")))
+    (condition-case err
+        (progn
+          (find-file path)
+          ;; Set up buffer cache hooks for the newly opened file
+          (with-current-buffer (current-buffer)
+            (antigravity-cli-ide-mcp--setup-buffer-cache-hooks))
+          ;; Text pattern selection takes precedence over line numbers
+          (cond
+           ;; Both start and end text patterns provided
+           ((and start-text end-text)
+            (goto-char (point-min))
+            (if (search-forward start-text nil t)
+                (let ((start-pos (match-beginning 0)))
+                  (if (search-forward end-text nil t)
+                      (let ((end-pos (match-end 0)))
+                        (goto-char start-pos)
+                        (push-mark end-pos t t)
+                        (activate-mark))
+                    ;; End text not found, just go to start
+                    (goto-char start-pos)))
+              ;; Start text not found, fall back to line numbers if provided
+              (when start-line
+                (goto-char (point-min))
+                (forward-line (1- start-line))
+                (when end-line
+                  (push-mark (point) t t)
+                  (forward-line (- end-line start-line))
+                  (end-of-line)
+                  (activate-mark)))))
+           ;; Only start text provided
+           (start-text
+            (goto-char (point-min))
+            (when (search-forward start-text nil t)
+              (goto-char (match-beginning 0))))
+           ;; Line number selection
+           (start-line
+            (goto-char (point-min))
+            (forward-line (1- start-line))
+            (when end-line
+              (push-mark (point) t t)
+              (forward-line (- end-line start-line))
+              (end-of-line)
+              (activate-mark))))
+          ;; Return in VS Code format
+          (list `((type . "text")
+                  (text . "FILE_OPENED"))))
+      (error
+       (signal 'mcp-error (list (format "Failed to open file: %s"
+                                         (error-message-string err))))))))
+
+(defun antigravity-cli-ide-mcp-handle-get-diagnostics (arguments &optional session)
+  "Get diagnostics (errors/warnings) for the current workspace.
+ARGUMENTS may contain an optional `uri' parameter.
+Optional SESSION contains the MCP session context."
+  (antigravity-cli-ide-diagnostics-handler arguments session))
+
+(defun antigravity-cli-ide-mcp-handle-close-tab (arguments)
+  "Close a tab/buffer.
+ARGUMENTS should contain `path' or `tab_name' of the file to close."
+  (let ((path (alist-get 'path arguments))
+        (tab-name (alist-get 'tab_name arguments)))
+    (cond
+     (path
+      (let ((buffer (find-buffer-visiting path)))
+        (if buffer
+            (progn
+              (kill-buffer buffer)
+              ;; Return in VS Code format
+              (list `((type . "text")
+                      (text . "TAB_CLOSED"))))
+          ;; Error case
+          (signal 'mcp-error (list (format "No buffer visiting %s" path))))))
+     (tab-name
+      ;; Check if it's a diff tab first - need to check all sessions
+      (let* ((found-session nil)
+             (found-diff-info nil))
+        ;; Search all sessions for this diff tab
+        (catch 'found
+          (maphash (lambda (_proj-dir session)
+                     (let* ((session-diffs (antigravity-cli-ide-mcp-session-active-diffs session))
+                            (diff-info (gethash tab-name session-diffs)))
+                       (when diff-info
+                         (setq found-session session
+                               found-diff-info diff-info)
+                         (throw 'found t))))
+                   antigravity-cli-ide-mcp--sessions))
+        (if found-diff-info
+            (progn
+              ;; Check if ediff is still active and quit it using stored control buffer
+              (when-let ((control-buf (alist-get 'control-buffer found-diff-info)))
+                (when (buffer-live-p control-buf)
+                  ;; Set a flag in diff-info to indicate this quit is from Antigravity
+                  (setf (alist-get 'quit-from-antigravity found-diff-info) t)
+                  ;; Store all ediff buffer references in diff-info before quitting
+                  (with-current-buffer control-buf
+                    (when (and (boundp 'ediff-error-buffer) ediff-error-buffer)
+                      (setf (alist-get 'error-buffer found-diff-info) ediff-error-buffer))
+                    (when (and (boundp 'ediff-diff-buffer) ediff-diff-buffer)
+                      (setf (alist-get 'diff-buffer found-diff-info) ediff-diff-buffer))
+                    (when (and (boundp 'ediff-fine-diff-buffer) ediff-fine-diff-buffer)
+                      (setf (alist-get 'fine-diff-buffer found-diff-info) ediff-fine-diff-buffer))
+                    (when (and (boundp 'ediff-custom-diff-buffer) ediff-custom-diff-buffer)
+                      (setf (alist-get 'custom-diff-buffer found-diff-info) ediff-custom-diff-buffer)))
+                  (puthash tab-name found-diff-info (antigravity-cli-ide-mcp-session-active-diffs found-session))
+                  ;; Use ediff's proper quit mechanism if available
+                  (condition-case err
+                      (if (fboundp 'ediff-really-quit)
+                          ;; Properly quit ediff which will run our quit hooks
+                          (with-current-buffer control-buf
+                            (ediff-really-quit nil))
+                        ;; Fallback: just kill the control buffer
+                        (kill-buffer control-buf))
+                    (error
+                     ;; If ediff-really-quit fails (e.g., side window issues),
+                     ;; just kill the control buffer directly
+                     (antigravity-cli-ide-debug "Error quitting ediff: %s. Killing control buffer directly."
+                                            (error-message-string err))
+                     (when (buffer-live-p control-buf)
+                       (kill-buffer control-buf))))))
+
+              ;; Clean up the diff buffers with the found session
+              (antigravity-cli-ide-mcp--cleanup-diff tab-name found-session)
+
+              ;; Return in VS Code format
+              (list `((type . "text")
+                      (text . "TAB_CLOSED"))))
+          ;; Not a diff - treat tab_name as buffer name
+          (let ((buffer (get-buffer tab-name)))
+            (if buffer
+                (progn
+                  (kill-buffer buffer)
+                  ;; Return in VS Code format
+                  (list `((type . "text")
+                          (text . "TAB_CLOSED"))))
+              ;; Error case - VS Code returns isError: true
+              (signal 'mcp-error (list (format "No buffer named %s" tab-name))))))))
+     (t
+      (signal 'mcp-error '("Either 'path' or 'tab_name' must be provided"))))))
+
+(defun antigravity-cli-ide-mcp-handle-open-diff (arguments)
+  "Open a diff view using ediff.
+ARGUMENTS should contain:
+- `old_file_path': Original file path
+- `new_file_path': New file path (usually same as old)
+- `new_file_contents': New content to diff against
+- `tab_name': Name for the diff tab"
+  (let ((old-file-path (alist-get 'old_file_path arguments))
+        (new-file-path (alist-get 'new_file_path arguments))
+        (new-file-contents (alist-get 'new_file_contents arguments))
+        (tab-name (alist-get 'tab_name arguments))
+        session)
+    ;; Validate required parameters
+    (unless (and old-file-path new-file-path new-file-contents tab-name)
+      (signal 'mcp-error '("Missing required parameters for openDiff")))
+
+    ;; Try to find session based on the file being diffed first
+    (setq session (or (antigravity-cli-ide-mcp--find-session-for-file old-file-path)
+                      ;; Fall back to current buffer's session
+                      (antigravity-cli-ide-mcp--get-current-session)))
+
+    ;; Ensure we have a valid session
+    (unless session
+      (signal 'mcp-error '("No active MCP session found")))
+
+    ;; Get the active diffs for this specific session
+    (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session)))
+      ;; Check if there's already a diff with this tab_name
+      (when-let ((existing-diff (gethash tab-name active-diffs)))
+        ;; Clean up existing diff
+        (antigravity-cli-ide-mcp--cleanup-diff tab-name session)))
+
+    ;; Switch to original tab if we're on a different one (when configured)
+    (when (and antigravity-cli-ide-switch-tab-on-ediff
+               (antigravity-cli-ide-mcp-session-original-tab session))
+      (let ((original-tab (antigravity-cli-ide-mcp-session-original-tab session)))
+        (when (and (fboundp 'tab-bar-mode)
+                   tab-bar-mode
+                   (fboundp 'tab-bar--current-tab)
+                   (fboundp 'tab-bar-select-tab-by-name))
+          (let ((current-tab (tab-bar--current-tab)))
+            ;; Compare tab names or indices
+            (when (and original-tab current-tab
+                       (not (equal (alist-get 'name original-tab)
+                                   (alist-get 'name current-tab))))
+              ;; Switch to the original tab
+              (tab-bar-select-tab-by-name (alist-get 'name original-tab)))))))
+
+    ;; Save current window configuration
+    (let* ((saved-winconf (current-window-configuration))
+           (buffers (antigravity-cli-ide-mcp--create-diff-buffers
+                     old-file-path new-file-contents tab-name))
+           (buffer-A (car buffers))
+           (buffer-B (cdr buffers))
+           (file-exists (file-exists-p old-file-path)))
+
+      ;; Store diff session info with session reference
+      (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session)))
+        (puthash tab-name
+                 `((buffer-A . ,buffer-A)
+                   (buffer-B . ,buffer-B)
+                   (old-file-path . ,old-file-path)
+                   (new-file-path . ,new-file-path)
+                   (file-exists . ,file-exists)
+                   (saved-winconf . ,saved-winconf)
+                   (session . ,session)  ; Store the session reference
+                   (created-at . ,(current-time)))
+                 active-diffs))
+
+      ;; Set up startup hook to configure ediff after it's fully initialized
+      (let* ((hooks (antigravity-cli-ide-mcp--setup-diff-hooks tab-name session saved-winconf))
+             (before-setup-hook-fn (car hooks))
+             (startup-hook-fn (cdr hooks)))
+
+        ;; Add hooks
+        (add-hook 'ediff-before-setup-hook before-setup-hook-fn)
+        (add-hook 'ediff-startup-hook startup-hook-fn)
+
+        ;; Start ediff
+        (condition-case err
+            (progn
+              ;; Delete all side windows before starting ediff
+              ;; This prevents "Cannot split side window" errors
+              (dolist (window (window-list))
+                (when (window-parameter window 'window-side)
+                  (delete-window window)))
+
+              ;; Start ediff with plain window setup (control panel at bottom)
+              ;; Set a unique control buffer suffix to avoid conflicts with other ediff sessions
+              (let ((old-setup-fn ediff-window-setup-function)
+                    (old-split-fn ediff-split-window-function)
+                    ;; Use tab-name to create a unique suffix for this ediff session
+                    (ediff-control-buffer-suffix (format "<%s>" tab-name)))
+                (unwind-protect
+                    (progn
+                      (setq ediff-window-setup-function 'ediff-setup-windows-plain
+                            ediff-split-window-function 'split-window-horizontally)
+                      (ediff-buffers buffer-A buffer-B))
+                  ;; Restore original values
+                  (setq ediff-window-setup-function old-setup-fn
+                        ediff-split-window-function old-split-fn))))
+          (error
+           ;; Handle ediff startup errors
+           (when buffer-B
+             (kill-buffer buffer-B))
+           (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session)))
+             (remhash tab-name active-diffs))
+           ;; Remove the hooks we added
+           (remove-hook 'ediff-before-setup-hook before-setup-hook-fn)
+           (remove-hook 'ediff-startup-hook startup-hook-fn)
+           ;; Re-signal the error
+           (signal (car err) (cdr err))))
+
+        ;; Return deferred indicator with session
+        `((deferred . t)
+          (unique-key . ,tab-name)
+          (session . ,session))))))
+
+(defun antigravity-cli-ide-mcp--handle-ediff-quit (tab-name &optional session)
+  "Handle ediff quit for TAB-NAME.
+Prompts user to accept/reject changes and sends appropriate MCP response.
+SESSION is the MCP session to use - if not provided, uses diff-info stored
+session."
+  (let* ((temp-session session)  ; Store the passed session
+         (active-diffs (antigravity-cli-ide-mcp--get-active-diffs temp-session))
+         (diff-info (gethash tab-name active-diffs)))
+    (if (not diff-info)
+        ;; Already cleaned up, just exit
+        nil
+      ;; Get session from diff-info if not provided
+      (unless temp-session
+        (setq temp-session (alist-get 'session diff-info)))
+      ;; Process the diff
+      (let* ((buffer-B (alist-get 'buffer-B diff-info))
+             (final-session (or temp-session
+                                (antigravity-cli-ide-mcp--get-current-session))))
+
+        (let ((accept-changes (y-or-n-p "Accept the changes? ")))
+
+          ;; Window configuration is now restored by the quit hook closure
+          ;; so we don't need to restore it here
+
+          ;; Defer the response to ensure ediff cleanup completes first
+          (run-with-idle-timer antigravity-cli-ide-mcp-handlers-idle-timer-delay nil
+                               (lambda ()
+                                 (if accept-changes
+                                     ;; User accepted changes
+                                     (let ((final-content (with-current-buffer buffer-B
+                                                            (buffer-string))))
+                                       ;; Don't save the file - let Antigravity handle the actual file modification
+                                       ;; Just return the content that should be saved
+
+                                       ;; Send FILE_SAVED response with the new content
+                                       (antigravity-cli-ide-mcp-complete-deferred
+                                        final-session
+                                        "openDiff"
+                                        (list `((type . "text") (text . "FILE_SAVED"))
+                                              `((type . "text") (text . ,final-content)))
+                                        tab-name)
+
+                                       ;; Mark that we've responded so close_tab knows ediff should be cleaned up
+                                       (when final-session
+                                         (let ((session-diffs (antigravity-cli-ide-mcp--get-active-diffs final-session)))
+                                           (puthash tab-name
+                                                    (cons '(responded . t) diff-info)
+                                                    session-diffs))))
+
+                                   ;; User rejected changes - send DIFF_REJECTED response
+                                   (antigravity-cli-ide-mcp-complete-deferred
+                                    final-session
+                                    "openDiff"
+                                    (list `((type . "text") (text . "DIFF_REJECTED"))
+                                          `((type . "text") (text . ,tab-name)))
+                                    tab-name)
+
+                                   ;; Mark that we've responded so close_tab knows ediff should be cleaned up
+                                   ;; Don't clean up immediately - let ediff quit process complete first
+                                   (when final-session
+                                     (let ((session-diffs (antigravity-cli-ide-mcp--get-active-diffs final-session)))
+                                       (puthash tab-name
+                                                (cons '(responded . t) diff-info)
+                                                session-diffs)))))))))))
+
+(defun antigravity-cli-ide-mcp--cleanup-diff (tab-name &optional session)
+  "Clean up diff session for TAB-NAME.
+SESSION is the MCP session to use - if not provided, tries to determine it."
+  (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session)))
+    (when-let ((diff-info (gethash tab-name active-diffs)))
+      ;; If session wasn't provided, try to get it from diff-info
+      (unless session
+        (setq session (alist-get 'session diff-info)))
+      (let ((buffer-A (alist-get 'buffer-A diff-info))
+            (buffer-B (alist-get 'buffer-B diff-info))
+            (control-buf (alist-get 'control-buffer diff-info))
+            (file-exists (alist-get 'file-exists diff-info))
+            ;; First try to get buffers from diff-info (stored during close_tab)
+            (error-buffer (alist-get 'error-buffer diff-info))
+            (diff-buffer (alist-get 'diff-buffer diff-info))
+            (fine-diff-buffer (alist-get 'fine-diff-buffer diff-info))
+            (custom-diff-buffer (alist-get 'custom-diff-buffer diff-info)))
+        ;; Get all ediff buffers from control buffer before killing it
+        (when (and control-buf (buffer-live-p control-buf))
+          (with-current-buffer control-buf
+            ;; Capture all ediff-related buffers
+            (antigravity-cli-ide-debug "Capturing ediff buffers from control buffer")
+            (when (and (boundp 'ediff-error-buffer) ediff-error-buffer (not error-buffer))
+              (setq error-buffer ediff-error-buffer))
+            (when (and (boundp 'ediff-diff-buffer) ediff-diff-buffer (not diff-buffer))
+              (setq diff-buffer ediff-diff-buffer))
+            (when (and (boundp 'ediff-fine-diff-buffer) ediff-fine-diff-buffer (not fine-diff-buffer))
+              (setq fine-diff-buffer ediff-fine-diff-buffer))
+            (when (and (boundp 'ediff-custom-diff-buffer) ediff-custom-diff-buffer (not custom-diff-buffer))
+              (setq custom-diff-buffer ediff-custom-diff-buffer))
+            (setq ediff-quit-hook nil))  ; Prevent quit hooks from running
+          (kill-buffer control-buf))
+        ;; Kill all the auxiliary buffers
+        (dolist (buf (list error-buffer diff-buffer fine-diff-buffer custom-diff-buffer))
+          (when (and buf (buffer-live-p buf))
+            (antigravity-cli-ide-debug "Killing ediff auxiliary buffer: %s" (buffer-name buf))
+            (kill-buffer buf)))
+        ;; Kill the temporary buffer (buffer B)
+        (when (and buffer-B (buffer-live-p buffer-B))
+          (kill-buffer buffer-B))
+        ;; Kill buffer A only if it was created for a new file
+        (when (and buffer-A (buffer-live-p buffer-A) (not file-exists))
+          ;; This is a *New file* buffer that we created
+          (kill-buffer buffer-A))
+        ;; Remove from active diffs
+        (remhash tab-name active-diffs)))))
+
+(defun antigravity-cli-ide-mcp-handle-close-all-diff-tabs (_arguments)
+  "Close all diff tabs/buffers for the current session only."
+  (let ((closed-count 0)
+        (current-session (antigravity-cli-ide-mcp--get-current-session)))
+    (if current-session
+        ;; Only clean up diffs for the current session
+        (let ((session-diffs (antigravity-cli-ide-mcp-session-active-diffs current-session)))
+          (maphash (lambda (tab-name _diff-info)
+                     (antigravity-cli-ide-mcp--cleanup-diff tab-name current-session)
+                     (setq closed-count (1+ closed-count)))
+                   session-diffs))
+      ;; Fallback to project directory if no current session
+      (when-let ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
+        (when-let ((session (antigravity-cli-ide-mcp--get-session-for-project
+                             project-dir)))
+          (let ((session-diffs (antigravity-cli-ide-mcp-session-active-diffs session)))
+            (maphash (lambda (tab-name _diff-info)
+                       (antigravity-cli-ide-mcp--cleanup-diff tab-name session)
+                       (setq closed-count (1+ closed-count)))
+                     session-diffs)))))
+    ;; Return success in VS Code format
+    (list `((type . "text")
+            (text . ,(format "CLOSED_%d_DIFF_TABS" closed-count))))))
+
+(defun antigravity-cli-ide-mcp-handle-execute-code (arguments)
+  "Execute code in Emacs.
+ARGUMENTS should contain:
+- `code': The Elisp expression to evaluate."
+  (let ((code (alist-get 'code arguments)))
+    (unless code
+      (signal 'mcp-error '("Missing required parameter: code")))
+    (condition-case err
+        (let* ((result (eval (car (read-from-string code)) t))
+               (output (format "%S" result)))
+          (list `((type . "text") (text . ,output))))
+      (error
+       (signal 'mcp-error (list (format "Evaluation error: %s" (error-message-string err))))))))
+
+;;; Tool Registry - Set the values
+
+(defun antigravity-cli-ide-mcp--build-tool-list ()
+  "Build the tool list, conditionally including ediff tools."
+  `(("openFile" . antigravity-cli-ide-mcp-handle-open-file)
+    ("getDiagnostics" . antigravity-cli-ide-mcp-handle-get-diagnostics)
+    ("close_tab" . antigravity-cli-ide-mcp-handle-close-tab)
+    ,@(when (bound-and-true-p antigravity-cli-ide-use-ide-diff)
+        '(("openDiff" . antigravity-cli-ide-mcp-handle-open-diff)
+          ("closeAllDiffTabs" . antigravity-cli-ide-mcp-handle-close-all-diff-tabs)))
+    ,@(when (bound-and-true-p antigravity-cli-ide-enable-execute-code)
+        '(("executeCode" . antigravity-cli-ide-mcp-handle-execute-code)))))
+
+(setq antigravity-cli-ide-mcp-tools (antigravity-cli-ide-mcp--build-tool-list))
+
+(defun antigravity-cli-ide-mcp--build-tool-schemas ()
+  "Build the tool schemas, conditionally including ediff tools."
+  `(("openFile" . ((type . "object")
+                   (properties . ((filePath . ((type . "string")
+                                               (description . "Path to the file to open")))
+                                  (startLine . ((type . "integer")
+                                                (description . "Start line for selection")))
+                                  (endLine . ((type . "integer")
+                                              (description . "End line for selection")))
+                                  (startText . ((type . "string")
+                                                (description . "Start text pattern for selection (takes precedence over line numbers)")))
+                                  (endText . ((type . "string")
+                                              (description . "End text pattern for selection")))))
+                   (required . ["filePath"])))
+    ("getDiagnostics" . ((type . "object")
+                         (properties . ((uri . ((type . "string")
+                                                (description . "Optional file URI to get diagnostics for. If not provided, gets diagnostics for all files.")))))
+                         (required . [])))
+    ("close_tab" . ((type . "object")
+                    (properties . ((path . ((type . "string")
+                                            (description . "Path to the file to close")))
+                                   (tab_name . ((type . "string")
+                                                (description . "Name of the tab to close")))))
+                    (required . [])))
+    ,@(when (bound-and-true-p antigravity-cli-ide-use-ide-diff)
+        '(("openDiff" . ((type . "object")
+                         (properties . ((old_file_path . ((type . "string")
+                                                          (description . "Path to the original file")))
+                                        (new_file_path . ((type . "string")
+                                                          (description . "Path to the new file (usually same as old)")))
+                                        (new_file_contents . ((type . "string")
+                                                              (description . "New content to diff against")))
+                                        (tab_name . ((type . "string")
+                                                     (description . "Name for the diff tab")))))
+                         (required . ["old_file_path" "new_file_path" "new_file_contents" "tab_name"])))
+          ("closeAllDiffTabs" . ((type . "object")
+                                 (properties . :json-empty)))))
+    ,@(when (bound-and-true-p antigravity-cli-ide-enable-execute-code)
+        '(("executeCode" . ((type . "object")
+                            (properties . ((code . ((type . "string")
+                                                    (description . "Elisp expression to evaluate")))))
+                            (required . ["code"])))))))
+
+(setq antigravity-cli-ide-mcp-tool-schemas (antigravity-cli-ide-mcp--build-tool-schemas))
+
+(defun antigravity-cli-ide-mcp--build-tool-descriptions ()
+  "Build the tool descriptions, conditionally including ediff tools."
+  `(("openFile" . "Open a file in the editor and optionally select a range of text")
+    ("getDiagnostics" . "Get language diagnostics from Emacs")
+    ("close_tab" . "Close a tab/buffer")
+    ,@(when (bound-and-true-p antigravity-cli-ide-use-ide-diff)
+        '(("openDiff" . "Open a diff view comparing old and new file contents")
+          ("closeAllDiffTabs" . "Close all open diff tabs in the current session")))
+    ,@(when (bound-and-true-p antigravity-cli-ide-enable-execute-code)
+        '(("executeCode" . "Evaluate an Elisp expression in Emacs and return the result")))))
+
+(setq antigravity-cli-ide-mcp-tool-descriptions (antigravity-cli-ide-mcp--build-tool-descriptions))
+
+(provide 'antigravity-cli-ide-mcp-handlers)
+
+;;; antigravity-cli-ide-mcp-handlers.el ends here
