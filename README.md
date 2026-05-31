@@ -63,7 +63,7 @@ Add this configuration to your `init.el` or `config.el` to load and configure th
 (add-to-list 'load-path "/path/to/agy-cli-ide")
 
 (use-package antigravity-cli-ide
-  :bind ("C-c C-'" . antigravity-cli-ide-menu)
+  :bind ("C-c g" . antigravity-cli-ide-menu)
   :config
   ;; Custom settings:
   (setq antigravity-cli-ide-window-side 'right
@@ -79,7 +79,7 @@ Add this configuration to your `init.el` or `config.el` to load and configure th
 ## 🌟 Usage & Keybindings
 
 ### Interactive Transient Menu
-Run `M-x antigravity-cli-ide-menu` or press your keybinding (`C-c C-'`) to open the interactive transient menu:
+Run `M-x antigravity-cli-ide-menu` or press your keybinding (`C-c g`) to open the interactive transient menu:
 - **s**: Start a new Antigravity session
 - **c**: Continue the most recent session
 - **r**: Resume previous conversation
