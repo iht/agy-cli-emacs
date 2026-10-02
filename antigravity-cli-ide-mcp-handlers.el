@@ -44,6 +44,7 @@
 (declare-function antigravity-cli-ide-mcp--setup-buffer-cache-hooks "antigravity-cli-ide-mcp" ())
 (declare-function antigravity-cli-ide--get-buffer-name "antigravity-cli-ide" (&optional directory))
 (declare-function antigravity-cli-ide--display-buffer-in-side-window "antigravity-cli-ide" (buffer))
+(declare-function antigravity-cli-ide--get-active-context-info "antigravity-cli-ide" ())
 (defvar ediff-control-buffer)
 (defvar ediff-window-setup-function)
 (defvar ediff-split-window-function)
@@ -647,11 +648,31 @@ ARGUMENTS should contain:
       (error
        (signal 'mcp-error (list (format "Evaluation error: %s" (error-message-string err))))))))
 
+(defun antigravity-cli-ide-mcp-handle-get-current-context (_arguments)
+  "Get the editor context from the companion buffer in Emacs.
+Returns file path, relative path, cursor position, and any active selection."
+  (if-let* ((info (and (fboundp 'antigravity-cli-ide--get-active-context-info)
+                       (antigravity-cli-ide--get-active-context-info))))
+      (list `((type . "text")
+              (text . ,(json-encode
+                        `((filePath . ,(plist-get info :file-path))
+                          (relativePath . ,(plist-get info :relative-path))
+                          (bufferName . ,(plist-get info :buffer-name))
+                          (cursorLine . ,(plist-get info :line))
+                          (cursorColumn . ,(plist-get info :column))
+                          (regionActive . ,(if (plist-get info :region-active) t :json-false))
+                          (selectionStartLine . ,(or (plist-get info :region-start) :json-null))
+                          (selectionEndLine . ,(or (plist-get info :region-end) :json-null))
+                          (selectedText . ,(or (plist-get info :selected-text) "")))))))
+    (list '((type . "text")
+            (text . "No file buffer is currently active in the editor.")))))
+
 ;;; Tool Registry - Set the values
 
 (defun antigravity-cli-ide-mcp--build-tool-list ()
   "Build the tool list, conditionally including ediff tools."
   `(("openFile" . antigravity-cli-ide-mcp-handle-open-file)
+    ("getCurrentBufferContext" . antigravity-cli-ide-mcp-handle-get-current-context)
     ("getDiagnostics" . antigravity-cli-ide-mcp-handle-get-diagnostics)
     ("close_tab" . antigravity-cli-ide-mcp-handle-close-tab)
     ,@(when (bound-and-true-p antigravity-cli-ide-use-ide-diff)
@@ -676,6 +697,8 @@ ARGUMENTS should contain:
                                   (endText . ((type . "string")
                                               (description . "End text pattern for selection")))))
                    (required . ["filePath"])))
+    ("getCurrentBufferContext" . ((type . "object")
+                                  (properties . :json-empty)))
     ("getDiagnostics" . ((type . "object")
                          (properties . ((uri . ((type . "string")
                                                 (description . "Optional file URI to get diagnostics for. If not provided, gets diagnostics for all files.")))))
@@ -689,9 +712,9 @@ ARGUMENTS should contain:
     ,@(when (bound-and-true-p antigravity-cli-ide-use-ide-diff)
         '(("openDiff" . ((type . "object")
                          (properties . ((old_file_path . ((type . "string")
-                                                          (description . "Path to the original file")))
+                                                           (description . "Path to the original file")))
                                         (new_file_path . ((type . "string")
-                                                          (description . "Path to the new file (usually same as old)")))
+                                                           (description . "Path to the new file (usually same as old)")))
                                         (new_file_contents . ((type . "string")
                                                               (description . "New content to diff against")))
                                         (tab_name . ((type . "string")
@@ -710,6 +733,7 @@ ARGUMENTS should contain:
 (defun antigravity-cli-ide-mcp--build-tool-descriptions ()
   "Build the tool descriptions, conditionally including ediff tools."
   `(("openFile" . "Open a file in the editor and optionally select a range of text")
+    ("getCurrentBufferContext" . "Get the file path, cursor line, and selected text currently active in the user's Emacs editor window")
     ("getDiagnostics" . "Get language diagnostics from Emacs")
     ("close_tab" . "Close a tab/buffer")
     ,@(when (bound-and-true-p antigravity-cli-ide-use-ide-diff)

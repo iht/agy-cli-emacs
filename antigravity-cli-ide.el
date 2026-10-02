@@ -177,12 +177,36 @@
   :type 'number
   :group 'antigravity-cli-ide)
 
+(defcustom antigravity-cli-ide-auto-prefix-prompt t
+  "When non-nil, `antigravity-cli-ide-send-prompt' pre-fills the prompt with the active file."
+  :type 'boolean
+  :group 'antigravity-cli-ide)
+
+(defcustom antigravity-cli-ide-auto-fill-context nil
+  "Whether to automatically insert the companion file context upon focusing Antigravity.
+When nil, context is only inserted via commands (`antigravity-cli-ide-insert-at-mentioned'
+or `antigravity-cli-ide-send-prompt').
+When 'on-switch, switching focus to the Antigravity window automatically types
+the @file reference into the terminal if a new turn has started."
+  :type '(choice (const :tag "Disabled (command only)" nil)
+                 (const :tag "Auto-fill on focus" on-switch))
+  :group 'antigravity-cli-ide)
+
+(defcustom antigravity-cli-ide-include-line-numbers-with-region t
+  "When non-nil and a region is active, format context with line numbers: @file:START-END."
+  :type 'boolean
+  :group 'antigravity-cli-ide)
+
 ;;; State Variables
 
 (defvar antigravity-cli-ide--cli-available nil)
 (defvar antigravity-cli-ide--processes (make-hash-table :test 'equal))
 (defvar antigravity-cli-ide--session-ids (make-hash-table :test 'equal))
 (defvar antigravity-cli-ide--last-accessed-buffer nil)
+(defvar antigravity-cli-ide--last-active-file-buffer nil
+  "Last focused buffer that was visiting a file and not an Antigravity terminal.")
+(defvar-local antigravity-cli-ide--context-inserted-for-turn nil
+  "Whether file context was already inserted into the terminal for the current prompt turn.")
 
 ;;; Vterm rendering optimizations
 
@@ -294,7 +318,15 @@
       (when-let ((proc (get-buffer-process buffer)))
         (set-process-window-size proc (window-body-height window) (window-body-width window))))))
 
+(defun antigravity-cli-ide-send-return ()
+  "Send return key to terminal and reset context insertion turn state."
+  (interactive)
+  (setq antigravity-cli-ide--context-inserted-for-turn nil)
+  (antigravity-cli-ide--terminal-send-return))
+
 (defun antigravity-cli-ide--setup-terminal-keybindings ()
+  (local-set-key (kbd "RET") #'antigravity-cli-ide-send-return)
+  (local-set-key (kbd "<return>") #'antigravity-cli-ide-send-return)
   (local-set-key (kbd "S-<return>") #'antigravity-cli-ide-insert-newline)
   (local-set-key (kbd "C-<escape>") #'antigravity-cli-ide-send-escape))
 
@@ -330,6 +362,113 @@
      ((antigravity-cli-ide--terminal-scroll-mode-active-p) nil)
      (stable res)
      (t nil))))
+
+;;; Context & Buffer Tracking
+
+(defun antigravity-cli-ide--track-active-buffer (&optional _window)
+  "Track the most recent file-visiting editor buffer."
+  (let ((buf (current-buffer)))
+    (unless (antigravity-cli-ide--session-buffer-p buf)
+      (when (and (buffer-live-p buf) (buffer-file-name buf))
+        (setq antigravity-cli-ide--last-active-file-buffer buf)))))
+
+(defun antigravity-cli-ide--get-target-buffer ()
+  "Return the buffer to use as the file context for Antigravity.
+If the current buffer is visiting a file and is not an Antigravity terminal,
+return it.  Otherwise, look for the most recently used window in the frame
+displaying a file buffer, or fall back to `antigravity-cli-ide--last-active-file-buffer'."
+  (let ((cur (current-buffer)))
+    (cond
+     ((and (buffer-live-p cur)
+           (buffer-file-name cur)
+           (not (antigravity-cli-ide--session-buffer-p cur)))
+      cur)
+     ;; Look for any visible window in the current frame displaying a file buffer
+     ((let ((win (cl-find-if (lambda (w)
+                               (let ((b (window-buffer w)))
+                                 (and (buffer-live-p b)
+                                      (buffer-file-name b)
+                                      (not (antigravity-cli-ide--session-buffer-p b)))))
+                             (window-list))))
+        (when win (window-buffer win))))
+     ;; Fall back to tracked buffer if still live and visiting a file
+     ((and (buffer-live-p antigravity-cli-ide--last-active-file-buffer)
+           (buffer-file-name antigravity-cli-ide--last-active-file-buffer))
+      antigravity-cli-ide--last-active-file-buffer)
+     (t nil))))
+
+(defun antigravity-cli-ide--get-active-context-info ()
+  "Get detailed context information about the active editor buffer.
+Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
+:line, :column, :region-active, :region-start, :region-end, and :selected-text."
+  (when-let* ((target-buf (antigravity-cli-ide--get-target-buffer)))
+    (with-current-buffer target-buf
+      (let* ((file-path (buffer-file-name target-buf))
+             (proj-dir (antigravity-cli-ide--get-working-directory))
+             (rel-path (if (and file-path proj-dir (file-in-directory-p file-path proj-dir))
+                           (file-relative-name file-path proj-dir)
+                         file-path))
+             (has-region (use-region-p))
+             (beg (when has-region (region-beginning)))
+             (end (when has-region (region-end)))
+             (start-line (when has-region (line-number-at-pos beg)))
+             (end-line (when has-region (line-number-at-pos end)))
+             (selected-text (when has-region (buffer-substring-no-properties beg end))))
+        (list :buffer target-buf
+              :buffer-name (buffer-name target-buf)
+              :file-path file-path
+              :relative-path rel-path
+              :line (line-number-at-pos (point))
+              :column (current-column)
+              :region-active has-region
+              :region-start start-line
+              :region-end end-line
+              :selected-text selected-text)))))
+
+(defun antigravity-cli-ide--format-context-reference (&optional target-buffer)
+  "Format the `@file' or `@file:start-end' reference for TARGET-BUFFER or active context."
+  (let ((info (if target-buffer
+                  (with-current-buffer target-buffer
+                    (let* ((file-path (buffer-file-name target-buffer))
+                           (proj-dir (antigravity-cli-ide--get-working-directory))
+                           (rel-path (if (and file-path proj-dir (file-in-directory-p file-path proj-dir))
+                                         (file-relative-name file-path proj-dir)
+                                       file-path))
+                           (has-region (use-region-p)))
+                      (list :relative-path rel-path
+                            :region-active has-region
+                            :region-start (when has-region (line-number-at-pos (region-beginning)))
+                            :region-end (when has-region (line-number-at-pos (region-end))))))
+                (antigravity-cli-ide--get-active-context-info))))
+    (when-let* ((rel-path (plist-get info :relative-path)))
+      (if (and antigravity-cli-ide-include-line-numbers-with-region
+               (plist-get info :region-active)
+               (plist-get info :region-start)
+               (plist-get info :region-end))
+          (format "@%s:%d-%d"
+                  rel-path
+                  (plist-get info :region-start)
+                  (plist-get info :region-end))
+        (format "@%s" rel-path)))))
+
+(defun antigravity-cli-ide--handle-window-selection-change (frame-or-window)
+  "Handle window selection changes to track active buffers and handle auto-context."
+  (let* ((win (if (windowp frame-or-window) frame-or-window (selected-window)))
+         (buf (window-buffer win)))
+    (if (antigravity-cli-ide--session-buffer-p buf)
+        ;; Switched into an Antigravity session buffer
+        (when (and (eq antigravity-cli-ide-auto-fill-context 'on-switch)
+                   (not (buffer-local-value 'antigravity-cli-ide--context-inserted-for-turn buf)))
+          (when-let* ((ref (antigravity-cli-ide--format-context-reference)))
+            (with-current-buffer buf
+              (antigravity-cli-ide--terminal-send-string (concat ref " "))
+              (setq antigravity-cli-ide--context-inserted-for-turn t)
+              (antigravity-cli-ide-debug "Auto-filled context on focus: %s" ref))))
+      ;; Switched into a regular buffer
+      (antigravity-cli-ide--track-active-buffer))))
+
+(add-hook 'window-selection-change-functions #'antigravity-cli-ide--handle-window-selection-change)
+(add-hook 'buffer-list-update-hook #'antigravity-cli-ide--track-active-buffer)
 
 ;;; Helper Functions
 
@@ -689,16 +828,34 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
 
 ;;;###autoload
 (defun antigravity-cli-ide-insert-at-mentioned ()
-  "Insert selected text as context (not applicable for agy stdio, fallback)."
+  "Insert the current buffer's file or region as context into the Antigravity prompt.
+Sends `@file' (or `@file:start-end' if a region is active) to the terminal
+and switches focus to the Antigravity window."
   (interactive)
-  (user-error "Automatic selection mentions are handled natively inside Antigravity CLI"))
+  (let* ((ref (antigravity-cli-ide--format-context-reference)))
+    (unless ref
+      (user-error "No file open in the current or companion buffer"))
+    (let* ((working-dir (antigravity-cli-ide--get-working-directory))
+           (buffer-name (antigravity-cli-ide--get-buffer-name working-dir))
+           (term-buffer (get-buffer buffer-name)))
+      (unless (and term-buffer (buffer-live-p term-buffer))
+        (user-error "No active Antigravity session. Start one with M-x antigravity-cli-ide"))
+      ;; Ensure window is displayed
+      (let ((window (get-buffer-window term-buffer)))
+        (unless window
+          (setq window (antigravity-cli-ide--display-buffer-in-side-window term-buffer)))
+        (with-current-buffer term-buffer
+          (antigravity-cli-ide--terminal-send-string (concat ref " "))
+          (setq antigravity-cli-ide--context-inserted-for-turn t))
+        (when window (select-window window))
+        (antigravity-cli-ide-debug "Inserted context reference: %s" ref)))))
 
 ;;;###autoload
 (defun antigravity-cli-ide-send-escape ()
   "Send escape key to terminal."
   (interactive)
   (let ((buffer-name (antigravity-cli-ide--get-buffer-name)))
-    (if-let ((buffer (get-buffer buffer-name)))
+    (if-let* ((buffer (get-buffer buffer-name)))
         (with-current-buffer buffer (antigravity-cli-ide--terminal-send-escape))
       (user-error "No active session"))))
 
@@ -707,7 +864,7 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
   "Insert newline into prompt."
   (interactive)
   (let ((buffer-name (antigravity-cli-ide--get-buffer-name)))
-    (if-let ((buffer (get-buffer buffer-name)))
+    (if-let* ((buffer (get-buffer buffer-name)))
         (with-current-buffer buffer
           (antigravity-cli-ide--terminal-send-string "\\")
           (sit-for 0.1)
@@ -716,16 +873,22 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
 
 ;;;###autoload
 (defun antigravity-cli-ide-send-prompt (&optional prompt)
-  "Send prompt to terminal."
+  "Send prompt to terminal.
+When `antigravity-cli-ide-auto-prefix-prompt' is non-nil, automatically
+pre-fills the prompt input with the active companion file context."
   (interactive)
   (let ((buffer-name (antigravity-cli-ide--get-buffer-name)))
-    (if-let ((buffer (get-buffer buffer-name)))
-        (let ((p (or prompt (read-string "Antigravity prompt: "))))
+    (if-let* ((buffer (get-buffer buffer-name)))
+        (let* ((initial-ref (when antigravity-cli-ide-auto-prefix-prompt
+                              (when-let* ((ref (antigravity-cli-ide--format-context-reference)))
+                                (concat ref " "))))
+               (p (or prompt (read-string "Antigravity prompt: " initial-ref))))
           (unless (string-empty-p p)
             (with-current-buffer buffer
               (antigravity-cli-ide--terminal-send-string p)
               (sit-for 0.1)
-              (antigravity-cli-ide--terminal-send-return))))
+              (antigravity-cli-ide--terminal-send-return)
+              (setq antigravity-cli-ide--context-inserted-for-turn nil))))
       (user-error "No active session"))))
 
 ;;;###autoload

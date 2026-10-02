@@ -51,6 +51,7 @@
 (declare-function antigravity-cli-ide-mcp-session-proc "antigravity-cli-ide-mcp" (session))
 (declare-function antigravity-cli-ide-mcp--get-current-session "antigravity-cli-ide-mcp" ())
 (declare-function antigravity-cli-ide--get-working-directory "antigravity-cli-ide" ())
+(declare-function antigravity-cli-ide--format-context-reference "antigravity-cli-ide" (&optional target-buffer))
 
 ;; Declare variables
 (defvar antigravity-cli-ide-cli-path)
@@ -66,6 +67,8 @@
 (defvar antigravity-cli-ide-use-side-window)
 (defvar antigravity-cli-ide-cli-debug)
 (defvar antigravity-cli-ide-cli-extra-flags)
+(defvar antigravity-cli-ide-auto-prefix-prompt)
+(defvar antigravity-cli-ide-auto-fill-context)
 
 ;;; Helper Functions
 
@@ -130,6 +133,13 @@
         (propertize (format "Active session in [%s] - %s" project-name connected)
                     'face 'success))
     (propertize "No active session" 'face 'transient-inactive-value)))
+
+(defun antigravity-cli-ide--insert-description ()
+  "Dynamic description for insert context command."
+  (if-let* ((ref (and (fboundp 'antigravity-cli-ide--format-context-reference)
+                      (antigravity-cli-ide--format-context-reference))))
+      (format "Insert context (%s)" ref)
+    "Insert context (@file)"))
 
 (defun antigravity-cli-ide-toggle-window ()
   "Toggle visibility of Antigravity CLI window."
@@ -273,6 +283,20 @@
   (setq antigravity-cli-ide-cli-debug (not antigravity-cli-ide-cli-debug))
   (antigravity-cli-ide-log "CLI debug mode %s" (if antigravity-cli-ide-cli-debug "enabled" "disabled")))
 
+(transient-define-suffix antigravity-cli-ide--toggle-auto-prefix-prompt ()
+  "Toggle auto prefix prompt setting."
+  (interactive)
+  (setq antigravity-cli-ide-auto-prefix-prompt (not antigravity-cli-ide-auto-prefix-prompt))
+  (antigravity-cli-ide-log "Auto prefix prompt %s" (if antigravity-cli-ide-auto-prefix-prompt "enabled" "disabled")))
+
+(transient-define-suffix antigravity-cli-ide--toggle-auto-fill-context ()
+  "Toggle auto fill context on focus."
+  (interactive)
+  (setq antigravity-cli-ide-auto-fill-context
+        (if (eq antigravity-cli-ide-auto-fill-context 'on-switch) nil 'on-switch))
+  (antigravity-cli-ide-log "Auto fill context on focus %s"
+                       (if antigravity-cli-ide-auto-fill-context "enabled" "disabled")))
+
 (defun antigravity-cli-ide--save-config ()
   "Save current configuration to custom file."
   (interactive)
@@ -287,6 +311,8 @@
   (customize-save-variable 'antigravity-cli-ide-use-side-window antigravity-cli-ide-use-side-window)
   (customize-save-variable 'antigravity-cli-ide-cli-path antigravity-cli-ide-cli-path)
   (customize-save-variable 'antigravity-cli-ide-cli-extra-flags antigravity-cli-ide-cli-extra-flags)
+  (customize-save-variable 'antigravity-cli-ide-auto-prefix-prompt antigravity-cli-ide-auto-prefix-prompt)
+  (customize-save-variable 'antigravity-cli-ide-auto-fill-context antigravity-cli-ide-auto-fill-context)
   (antigravity-cli-ide-log "Configuration saved to custom file"))
 
 ;;; Transient Menus
@@ -307,7 +333,7 @@
     ("w" "Toggle window visibility" antigravity-cli-ide-toggle-window)
     ("W" "Toggle recent window" antigravity-cli-ide-toggle-recent)]
    ["Interaction"
-    ("i" "Insert selection" antigravity-cli-ide-insert-at-mentioned)
+    ("i" antigravity-cli-ide-insert-at-mentioned :description antigravity-cli-ide--insert-description)
     ("p" "Send prompt from minibuffer" antigravity-cli-ide-send-prompt)
     ("e" "Send escape key" antigravity-cli-ide-send-escape)
     ("n" "Insert newline" antigravity-cli-ide-insert-newline)]
@@ -340,6 +366,13 @@
     ("u" "Toggle side window" antigravity-cli-ide--toggle-use-side-window
      :description (lambda () (format "Use side window (%s)"
                                      (if antigravity-cli-ide-use-side-window "ON" "OFF"))))]
+   ["Context Settings"
+    ("a" "Toggle auto-prefix prompt" antigravity-cli-ide--toggle-auto-prefix-prompt
+     :description (lambda () (format "Auto prefix prompt (%s)"
+                                     (if antigravity-cli-ide-auto-prefix-prompt "ON" "OFF"))))
+    ("A" "Toggle auto-fill context on focus" antigravity-cli-ide--toggle-auto-fill-context
+     :description (lambda () (format "Auto-fill on focus (%s)"
+                                     (if antigravity-cli-ide-auto-fill-context "ON" "OFF"))))]
    ["CLI Settings"
     ("p" "Set CLI path" antigravity-cli-ide--set-cli-path)
     ("x" "Set extra CLI flags" antigravity-cli-ide--set-cli-extra-flags)]]

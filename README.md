@@ -86,9 +86,20 @@ Run `M-x antigravity-cli-ide-menu` or press your keybinding (`C-c g`) to open th
 - **q**: Stop/kill the active session
 - **b**: Switch focus to the Antigravity buffer
 - **w**: Toggle side window visibility
-- **C**: Access comprehensive window and CLI settings
+- **i**: Insert active file/region context (`@file` or `@file:start-end`) into the Antigravity prompt and focus terminal
+- **p**: Send prompt from minibuffer (automatically pre-filled with the active companion file context)
+- **C**: Access comprehensive window, CLI, and context settings
 - **d**: Open the diagnostics, sessions, and debug logging panel
 
+### Active Buffer File Context
+
+Antigravity CLI IDE provides seamless context sharing between your active Emacs editor buffers and Antigravity:
+* **Interactive `@file` insertion**: Press `i` (`antigravity-cli-ide-insert-at-mentioned`) in the transient menu to send `@<file>` (or `@<file>:<start>-<end>` if a region is selected) to the prompt and jump into the terminal.
+* **Prompt pre-filling**: Press `p` (`antigravity-cli-ide-send-prompt`) to open a minibuffer prompt pre-populated with `@<file> `.
+* **Focus Auto-fill**: Set `antigravity-cli-ide-auto-fill-context` to `'on-switch` (via `C-c g C A`) to automatically type `@<file> ` when switching focus to the Antigravity terminal window.
+* **Native MCP Context Tool**: Exposes `getCurrentBufferContext` to Antigravity so the AI assistant can query your editor's live file, cursor position, and selection even without explicit mentions.
+
 ### Key Bindings inside the Antigravity Terminal Buffer:
+* `RET` / `<return>` - Send prompt (and reset context insertion turn state).
 * `S-RET` (Shift+Return) - Insert a newline in the prompt (simulates a multiline prompt).
 * `C-g` / `C-<escape>` - Cancel or escape active prompts.

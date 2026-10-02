@@ -140,5 +140,100 @@
   (should (fboundp 'antigravity-cli-ide-config-menu))
   (should (fboundp 'antigravity-cli-ide-debug-menu)))
 
+(ert-deftest test-antigravity-cli-ide-target-buffer-and-format ()
+  "Verify target buffer resolution and context formatting with and without region."
+  (let* ((proj-dir (antigravity-cli-ide--get-working-directory))
+         (temp-file (expand-file-name "test-context-file.txt" proj-dir))
+         (buf (find-file-noselect temp-file)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n")
+          (goto-char (point-min))
+          (antigravity-cli-ide--track-active-buffer)
+          
+          ;; Target buffer resolves to the current buffer
+          (should (eq (antigravity-cli-ide--get-target-buffer) buf))
+          
+          ;; Without region, should format as @test-context-file.txt
+          (should (string= (antigravity-cli-ide--format-context-reference)
+                           "@test-context-file.txt"))
+          
+          ;; With active region from line 2 to line 4
+          (goto-line 2)
+          (set-mark (point))
+          (goto-line 4)
+          (end-of-line)
+          (activate-mark)
+          
+          (should (use-region-p))
+          (should (string= (antigravity-cli-ide--format-context-reference)
+                           "@test-context-file.txt:2-4"))
+          (deactivate-mark))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (when (file-exists-p temp-file)
+        (delete-file temp-file)))))
+
+(ert-deftest test-antigravity-cli-ide-target-buffer-from-session ()
+  "Verify target buffer resolution when currently inside a session buffer."
+  (let* ((proj-dir (antigravity-cli-ide--get-working-directory))
+         (temp-file (expand-file-name "test-file-companion.txt" proj-dir))
+         (file-buf (find-file-noselect temp-file))
+         (session-buf (get-buffer-create "*antigravity-cli[test-proj]*")))
+    (unwind-protect
+        (progn
+          ;; Visit file buffer and track it
+          (with-current-buffer file-buf
+            (antigravity-cli-ide--track-active-buffer))
+          
+          ;; Inside session buffer, target buffer should resolve to tracked file buffer
+          (with-current-buffer session-buf
+            (should (antigravity-cli-ide--session-buffer-p session-buf))
+            (should (eq (antigravity-cli-ide--get-target-buffer) file-buf))
+            (should (string= (antigravity-cli-ide--format-context-reference)
+                             "@test-file-companion.txt"))))
+      (when (buffer-live-p file-buf)
+        (with-current-buffer file-buf (set-buffer-modified-p nil))
+        (kill-buffer file-buf))
+      (when (buffer-live-p session-buf)
+        (kill-buffer session-buf))
+      (when (file-exists-p temp-file)
+        (delete-file temp-file)))))
+
+(ert-deftest test-antigravity-cli-ide-mcp-current-context-tool ()
+  "Verify getCurrentBufferContext MCP tool registration and response structure."
+  ;; Tool should be registered in tool list and schemas
+  (let ((tool-names (mapcar #'car (antigravity-cli-ide-mcp--build-tool-list)))
+        (schemas (antigravity-cli-ide-mcp--build-tool-schemas)))
+    (should (member "getCurrentBufferContext" tool-names))
+    (should (assoc "getCurrentBufferContext" schemas)))
+  
+  ;; Test tool execution with active file
+  (let* ((proj-dir (antigravity-cli-ide--get-working-directory))
+         (temp-file (expand-file-name "test-mcp-context.txt" proj-dir))
+         (buf (find-file-noselect temp-file)))
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "Line A\nLine B\nLine C\n")
+          (goto-line 2)
+          (antigravity-cli-ide--track-active-buffer)
+          
+          (let* ((resp (antigravity-cli-ide-mcp-handle-get-current-context nil))
+                 (item (car resp))
+                 (text (cdr (assoc 'text item)))
+                 (parsed (json-read-from-string text)))
+            (should (string= (cdr (assoc 'type item)) "text"))
+            (should (string= (cdr (assoc 'relativePath parsed)) "test-mcp-context.txt"))
+            (should (eq (cdr (assoc 'cursorLine parsed)) 2))))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (when (file-exists-p temp-file)
+        (delete-file temp-file)))))
+
 (provide 'antigravity-cli-ide-tests)
 ;;; antigravity-cli-ide-tests.el ends here
