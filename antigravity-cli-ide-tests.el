@@ -12,9 +12,6 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'project)
-(require 'antigravity-cli-ide)
-(require 'antigravity-cli-ide-mcp)
-(require 'antigravity-cli-ide-diagnostics)
 
 ;;; Mock implementations for testing environment stability
 
@@ -23,6 +20,25 @@
 
 (unless (featurep 'eat)
   (provide 'eat))
+
+;; Ensure transient library and internal stubs are available in batch testing mode
+(require 'transient nil t)
+
+(unless (fboundp 'transient--set-layout)
+  (defun transient--set-layout (prefix layout)
+    "Mock stub for `transient--set-layout' in test environments."
+    (put prefix 'transient--layout layout)))
+
+(unless (facep 'transient-inactive-value)
+  (defface transient-inactive-value
+    '((t :inherit shadow))
+    "Fallback face for `transient-inactive-value' in test environments."
+    :group 'antigravity-cli-ide))
+
+(require 'antigravity-cli-ide)
+(require 'antigravity-cli-ide-transient)
+(require 'antigravity-cli-ide-mcp)
+(require 'antigravity-cli-ide-diagnostics)
 
 ;;; Test Cases
 
@@ -115,6 +131,14 @@
         (should found)
         (should (file-executable-p found))
         (should (antigravity-cli-ide--ensure-cli))))))
+
+(ert-deftest test-antigravity-cli-ide-transient-symbols-bound ()
+  "Verify that transient dependencies and interactive menus are safely bound in batch mode."
+  (should (featurep 'transient))
+  (should (fboundp 'transient--set-layout))
+  (should (fboundp 'antigravity-cli-ide-menu))
+  (should (fboundp 'antigravity-cli-ide-config-menu))
+  (should (fboundp 'antigravity-cli-ide-debug-menu)))
 
 (provide 'antigravity-cli-ide-tests)
 ;;; antigravity-cli-ide-tests.el ends here
