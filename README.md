@@ -103,3 +103,17 @@ Antigravity CLI IDE provides seamless context sharing between your active Emacs 
 * `RET` / `<return>` - Send prompt (and reset context insertion turn state).
 * `S-RET` (Shift+Return) - Insert a newline in the prompt (simulates a multiline prompt).
 * `C-g` / `C-<escape>` - Cancel or escape active prompts.
+
+---
+
+## 🛠 Development & Testing
+
+You can compile all files and execute the ERT test suite using the included `Makefile`:
+
+* `make compile` - Byte-compile all Emacs Lisp source files
+* `make test` - Run the ERT automated test suite in batch mode
+* `make all` - Byte-compile all source files and run the test suite (default target)
+* `make clean` - Remove generated `.elc` compiled artifacts
+* `make checkdoc` - Run checkdoc style inspection on source files
+* `make help` - Show available Makefile targets
+
