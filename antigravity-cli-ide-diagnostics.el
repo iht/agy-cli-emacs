@@ -1,9 +1,11 @@
 ;;; antigravity-cli-ide-diagnostics.el --- Diagnostic integration for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
-;; Keywords: ai, antigravity, diagnostics, flycheck
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; This file is not part of GNU Emacs.
 
@@ -209,7 +211,7 @@ Optional SESSION contains the MCP session context."
       (let ((buffer-count 0)
             (checked-count 0))
         (dolist (buffer (buffer-list))
-          (when-let ((file (buffer-file-name buffer)))
+          (when-let* ((file (buffer-file-name buffer)))
             (setq buffer-count (1+ buffer-count))
             ;; Filter by project directory if session is available
             (when (or (not project-dir)

@@ -1,12 +1,14 @@
-;;; antigravity-cli-ide.el --- Antigravity CLI integration for Emacs  -*- lexical-binding: t; -*-
+;;; antigravity-cli-ide.el --- Antigravity CLI integration  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
-;; Keywords: ai, antigravity, code, assistant, mcp
-;; URL: https://github.com/manzaltu/claude-code-ide.el
+;; Package-Requires: ((emacs "29.1") (transient "0.9.0"))
+;; Keywords: tools, processes, convenience, ai, antigravity
+;; URL: https://github.com/herraiz-org/antigravity-cli-ide
 
 ;; This file is not part of GNU Emacs.
 
@@ -25,16 +27,20 @@
 
 ;;; Commentary:
 
-;; Antigravity CLI IDE integration for Emacs provides seamless integration
+;; Antigravity CLI IDE integration provides seamless integration
 ;; with the Antigravity CLI (`agy` executable) through the Model Context Protocol (MCP).
 ;; It supports file operations, diagnostics, and editor state management.
 ;;
 ;; This package starts a TCP socket server in Emacs, and dynamically configures
 ;; `~/.gemini/antigravity-cli/mcp_config.json` so that the CLI connects back to Emacs
-;; using standard `nc` (netcat).
+;; using standard `nc` (netcat).  Upon session termination, original configuration
+;; state is restored.
+;;
+;; Adapted from `claude-code-ide.el` by Yoav Orot, optimized for Google Antigravity
+;; and redesigned with a pure TCP loopback bridge requiring zero external dependencies.
 ;;
 ;; Features:
-;; - Pure TCP socket server requiring no third-party libraries (no websocket.el or web-server.el needed)
+;; - Pure TCP socket server requiring no third-party libraries (no websocket or web-server needed)
 ;; - Automatic dynamic management of global `mcp_config.json`
 ;; - Support for vterm and eat terminal backends
 ;; - Window-management, side-windows, and session restore
@@ -178,42 +184,50 @@
   :group 'antigravity-cli-ide)
 
 (defcustom antigravity-cli-ide-auto-prefix-prompt t
-  "When non-nil, `antigravity-cli-ide-send-prompt' pre-fills the prompt with the active file."
+  "Whether `antigravity-cli-ide-send-prompt' pre-fills active file context."
   :type 'boolean
   :group 'antigravity-cli-ide)
 
 (defcustom antigravity-cli-ide-auto-fill-context nil
-  "Whether to automatically insert the companion file context upon focusing Antigravity.
-When nil, context is only inserted via commands (`antigravity-cli-ide-insert-at-mentioned'
-or `antigravity-cli-ide-send-prompt').
-When 'on-switch, switching focus to the Antigravity window automatically types
-the @file reference into the terminal if a new turn has started."
+  "Whether to insert companion file context upon focusing Antigravity.
+When nil, context is only inserted via commands:
+`antigravity-cli-ide-insert-at-mentioned' or
+`antigravity-cli-ide-send-prompt'.
+When \\='on-switch, switching focus to the Antigravity window automatically
+types the @file reference into the terminal if a new turn has started."
   :type '(choice (const :tag "Disabled (command only)" nil)
                  (const :tag "Auto-fill on focus" on-switch))
   :group 'antigravity-cli-ide)
 
 (defcustom antigravity-cli-ide-include-line-numbers-with-region t
-  "When non-nil and a region is active, format context with line numbers: @file:START-END."
+  "Whether to format context with line numbers: @file:START-END."
   :type 'boolean
   :group 'antigravity-cli-ide)
 
 ;;; State Variables
 
-(defvar antigravity-cli-ide--cli-available nil)
-(defvar antigravity-cli-ide--processes (make-hash-table :test 'equal))
-(defvar antigravity-cli-ide--session-ids (make-hash-table :test 'equal))
-(defvar antigravity-cli-ide--last-accessed-buffer nil)
+(defvar antigravity-cli-ide--cli-available nil
+  "Whether the Antigravity CLI executable is available.")
+(defvar antigravity-cli-ide--processes (make-hash-table :test 'equal)
+  "Hash table mapping project directories to active terminal processes.")
+(defvar antigravity-cli-ide--session-ids (make-hash-table :test 'equal)
+  "Hash table mapping project directories to active session IDs.")
+(defvar antigravity-cli-ide--last-accessed-buffer nil
+  "Last accessed Antigravity terminal buffer.")
 (defvar antigravity-cli-ide--last-active-file-buffer nil
   "Last focused buffer that was visiting a file and not an Antigravity terminal.")
 (defvar-local antigravity-cli-ide--context-inserted-for-turn nil
-  "Whether file context was already inserted into the terminal for the current prompt turn.")
+  "Whether file context was inserted into terminal for current prompt turn.")
 
 ;;; Vterm rendering optimizations
 
-(defvar-local antigravity-cli-ide--vterm-render-queue nil)
-(defvar-local antigravity-cli-ide--vterm-render-timer nil)
+(defvar-local antigravity-cli-ide--vterm-render-queue nil
+  "Queue of pending string chunks for vterm rendering.")
+(defvar-local antigravity-cli-ide--vterm-render-timer nil
+  "Timer object for batch rendering in vterm.")
 
 (defun antigravity-cli-ide--count-escape-sequence (sequence input)
+  "Count occurrences of SEQUENCE in INPUT."
   (let ((count 0) (start 0))
     (while (setq start (string-search sequence input start))
       (cl-incf count)
@@ -221,6 +235,7 @@ the @file reference into the terminal if a new turn has started."
     count))
 
 (defun antigravity-cli-ide--vterm-smart-renderer (orig-fun process input)
+  "Batched rendering advice around ORIG-FUN for PROCESS with INPUT."
   (if (or (not antigravity-cli-ide-vterm-anti-flicker)
           (not (antigravity-cli-ide--session-buffer-p (process-buffer process))))
       (funcall orig-fun process input)
@@ -256,9 +271,11 @@ the @file reference into the terminal if a new turn has started."
                                    (current-buffer))))
             (funcall orig-fun process input)))))))
 
-(defvar-local antigravity-cli-ide--saved-cursor-type nil)
+(defvar-local antigravity-cli-ide--saved-cursor-type nil
+  "Saved cursor type when entering copy mode.")
 
 (defun antigravity-cli-ide--vterm-copy-mode-hook ()
+  "Hook to toggle cursor display in vterm copy mode."
   (if (bound-and-true-p vterm-copy-mode)
       (progn
         (setq antigravity-cli-ide--saved-cursor-type cursor-type)
@@ -266,6 +283,7 @@ the @file reference into the terminal if a new turn has started."
     (setq cursor-type antigravity-cli-ide--saved-cursor-type)))
 
 (defun antigravity-cli-ide--configure-vterm-buffer ()
+  "Configure terminal buffer settings for vterm."
   (setq-local vterm-scroll-to-bottom-on-output nil)
   (when (boundp 'vterm--redraw-immididately)
     (setq-local vterm--redraw-immididately nil))
@@ -276,7 +294,7 @@ the @file reference into the terminal if a new turn has started."
   (when (featurep 'hl-line) (hl-line-mode -1))
   (face-remap-add-relative 'nobreak-space :inherit 'default)
   (add-hook 'vterm-copy-mode-hook #'antigravity-cli-ide--vterm-copy-mode-hook nil t)
-  (when-let ((proc (get-buffer-process (current-buffer))))
+  (when-let* ((proc (get-buffer-process (current-buffer))))
     (set-process-query-on-exit-flag proc nil)
     (when (fboundp 'process-put)
       (process-put proc 'read-output-max 4096)))
@@ -286,6 +304,7 @@ the @file reference into the terminal if a new turn has started."
 ;;; Terminal abstraction helpers
 
 (defun antigravity-cli-ide--terminal-ensure-backend ()
+  "Ensure the configured terminal backend package is installed."
   (cond
    ((eq antigravity-cli-ide-terminal-backend 'vterm)
     (unless (featurep 'vterm) (require 'vterm nil t))
@@ -295,27 +314,31 @@ the @file reference into the terminal if a new turn has started."
     (unless (featurep 'eat) (user-error "Please install the eat package")))))
 
 (defun antigravity-cli-ide--terminal-send-string (string)
+  "Send STRING to the active terminal process."
   (cond
    ((eq antigravity-cli-ide-terminal-backend 'vterm) (vterm-send-string string))
    ((eq antigravity-cli-ide-terminal-backend 'eat)
     (when eat-terminal (eat-term-send-string eat-terminal string)))))
 
 (defun antigravity-cli-ide--terminal-send-escape ()
+  "Send ESC escape character to the active terminal process."
   (cond
    ((eq antigravity-cli-ide-terminal-backend 'vterm) (vterm-send-escape))
    ((eq antigravity-cli-ide-terminal-backend 'eat)
     (when eat-terminal (eat-term-send-string eat-terminal "\e")))))
 
 (defun antigravity-cli-ide--terminal-send-return ()
+  "Send CR return character to the active terminal process."
   (cond
    ((eq antigravity-cli-ide-terminal-backend 'vterm) (vterm-send-return))
    ((eq antigravity-cli-ide-terminal-backend 'eat)
     (when eat-terminal (eat-term-send-string eat-terminal "\r")))))
 
 (defun antigravity-cli-ide--sync-terminal-dimensions (buffer window)
+  "Synchronize terminal process in BUFFER with dimensions of WINDOW."
   (when (and buffer window (buffer-live-p buffer) (window-live-p window))
     (with-current-buffer buffer
-      (when-let ((proc (get-buffer-process buffer)))
+      (when-let* ((proc (get-buffer-process buffer)))
         (set-process-window-size proc (window-body-height window) (window-body-width window))))))
 
 (defun antigravity-cli-ide-send-return ()
@@ -325,6 +348,7 @@ the @file reference into the terminal if a new turn has started."
   (antigravity-cli-ide--terminal-send-return))
 
 (defun antigravity-cli-ide--setup-terminal-keybindings ()
+  "Set up buffer-local keybindings for Antigravity terminal buffer."
   (local-set-key (kbd "RET") #'antigravity-cli-ide-send-return)
   (local-set-key (kbd "<return>") #'antigravity-cli-ide-send-return)
   (local-set-key (kbd "S-<return>") #'antigravity-cli-ide-insert-newline)
@@ -333,20 +357,24 @@ the @file reference into the terminal if a new turn has started."
 ;;; Reflow glitch workaround
 
 (defun antigravity-cli-ide--terminal-resize-handler ()
+  "Return the appropriate resize handler function for terminal backend."
   (pcase antigravity-cli-ide-terminal-backend
     ('vterm #'vterm--window-adjust-process-window-size)
     ('eat #'eat--adjust-process-window-size)))
 
 (defun antigravity-cli-ide--terminal-scroll-mode-active-p ()
+  "Check if scrolling or copy mode is currently active in terminal."
   (pcase antigravity-cli-ide-terminal-backend
     ('vterm (bound-and-true-p vterm-copy-mode))
     ('eat (not (bound-and-true-p eat--semi-char-mode)))))
 
 (defun antigravity-cli-ide--session-buffer-p (buffer)
-  (when-let ((name (if (stringp buffer) buffer (buffer-name buffer))))
+  "Return non-nil if BUFFER is an Antigravity session buffer."
+  (when-let* ((name (if (stringp buffer) buffer (buffer-name buffer))))
     (string-prefix-p "*antigravity-cli[" name)))
 
 (defun antigravity-cli-ide--terminal-reflow-filter (original-fn &rest args)
+  "Advice wrapper around ORIGINAL-FN with ARGS to prevent reflow flicker."
   (let ((res (apply original-fn args))
         (stable t))
     (dolist (win (window-list))
@@ -376,7 +404,8 @@ the @file reference into the terminal if a new turn has started."
   "Return the buffer to use as the file context for Antigravity.
 If the current buffer is visiting a file and is not an Antigravity terminal,
 return it.  Otherwise, look for the most recently used window in the frame
-displaying a file buffer, or fall back to `antigravity-cli-ide--last-active-file-buffer'."
+displaying a file buffer, or fall back to
+`antigravity-cli-ide--last-active-file-buffer'."
   (let ((cur (current-buffer)))
     (cond
      ((and (buffer-live-p cur)
@@ -426,7 +455,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
               :selected-text selected-text)))))
 
 (defun antigravity-cli-ide--format-context-reference (&optional target-buffer)
-  "Format the `@file' or `@file:start-end' reference for TARGET-BUFFER or active context."
+  "Format the `@file' or `@file:start-end' reference for TARGET-BUFFER."
   (let ((info (if target-buffer
                   (with-current-buffer target-buffer
                     (let* ((file-path (buffer-file-name target-buffer))
@@ -452,7 +481,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
         (format "@%s" rel-path)))))
 
 (defun antigravity-cli-ide--handle-window-selection-change (frame-or-window)
-  "Handle window selection changes to track active buffers and handle auto-context."
+  "Track active buffers on FRAME-OR-WINDOW selection changes."
   (let* ((win (if (windowp frame-or-window) frame-or-window (selected-window)))
          (buf (window-buffer win)))
     (if (antigravity-cli-ide--session-buffer-p buf)
@@ -473,22 +502,27 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
 ;;; Helper Functions
 
 (defun antigravity-cli-ide--default-buffer-name (directory)
+  "Return default buffer name for DIRECTORY."
   (format "*antigravity-cli[%s]*" (file-name-nondirectory (directory-file-name directory))))
 
 (defun antigravity-cli-ide--get-working-directory ()
-  (if-let ((project (project-current)))
+  "Get the working directory for current project or default directory."
+  (if-let* ((project (project-current)))
       (expand-file-name (project-root project))
     (expand-file-name default-directory)))
 
 (defun antigravity-cli-ide--get-buffer-name (&optional directory)
+  "Get the session buffer name for DIRECTORY."
   (funcall antigravity-cli-ide-buffer-name-function
            (or directory (antigravity-cli-ide--get-working-directory))))
 
 (defun antigravity-cli-ide--get-process (&optional directory)
+  "Get the live process for DIRECTORY."
   (gethash (or directory (antigravity-cli-ide--get-working-directory))
            antigravity-cli-ide--processes))
 
 (defun antigravity-cli-ide--set-process (process &optional directory)
+  "Register PROCESS for DIRECTORY in the active processes table."
   (when (and antigravity-cli-ide-prevent-reflow-glitch
              (= (hash-table-count antigravity-cli-ide--processes) 0))
     (advice-add (antigravity-cli-ide--terminal-resize-handler)
@@ -498,12 +532,14 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
            antigravity-cli-ide--processes))
 
 (defun antigravity-cli-ide--cleanup-dead-processes ()
+  "Remove terminated processes from the active processes table."
   (maphash (lambda (dir proc)
              (unless (process-live-p proc)
                (remhash dir antigravity-cli-ide--processes)))
            antigravity-cli-ide--processes))
 
 (defun antigravity-cli-ide--cleanup-all-sessions ()
+  "Clean up all active Antigravity CLI sessions."
   (maphash (lambda (dir proc)
              (when (process-live-p proc)
                (antigravity-cli-ide--cleanup-on-exit dir)))
@@ -512,6 +548,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
 (add-hook 'kill-emacs-hook #'antigravity-cli-ide--cleanup-all-sessions)
 
 (defun antigravity-cli-ide--display-buffer-in-side-window (buffer)
+  "Display BUFFER in dedicated side window."
   (let ((window
          (if antigravity-cli-ide-use-side-window
              (let* ((side antigravity-cli-ide-window-side)
@@ -548,6 +585,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
 (defvar antigravity-cli-ide--cleanup-in-progress nil)
 
 (defun antigravity-cli-ide--cleanup-on-exit (directory)
+  "Clean up processes, sockets, and configuration for DIRECTORY."
   (unless antigravity-cli-ide--cleanup-in-progress
     (setq antigravity-cli-ide--cleanup-in-progress t)
     (unwind-protect
@@ -569,7 +607,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
             (when session-id (remhash directory antigravity-cli-ide--session-ids)))
           
           (let ((buffer-name (antigravity-cli-ide--get-buffer-name directory)))
-            (when-let ((buffer (get-buffer buffer-name)))
+            (when-let* ((buffer (get-buffer buffer-name)))
               (when (buffer-live-p buffer)
                 (let ((kill-buffer-hook nil)
                       (kill-buffer-query-functions nil))
@@ -582,9 +620,10 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
 (defun antigravity-cli-ide--find-cli ()
   "Locate the Antigravity CLI executable.
 If `antigravity-cli-ide-cli-path' is an absolute path, return it if executable.
-Otherwise, search `exec-path', then fallback to common installation directories
-such as ~/.local/bin and ~/.gemini/antigravity-cli/bin.
-If found in a fallback directory, add that directory to `exec-path' and `PATH'."
+Otherwise, search variable `exec-path', then fallback to common
+installation directories such as ~/.local/bin and ~/.gemini/antigravity-cli/bin.
+If found in a fallback directory, add that directory to variable `exec-path'
+and `PATH'."
   (cond
    ((and (file-name-absolute-p antigravity-cli-ide-cli-path)
          (file-executable-p antigravity-cli-ide-cli-path))
@@ -621,6 +660,7 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
 ;;; Commands
 
 (defun antigravity-cli-ide--toggle-existing-window (existing-buffer working-dir)
+  "Toggle visibility of EXISTING-BUFFER in WORKING-DIR."
   (let ((window (get-buffer-window existing-buffer)))
     (if window
         (progn
@@ -628,11 +668,12 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
           (delete-window window))
       (progn
         (antigravity-cli-ide--display-buffer-in-side-window existing-buffer)
-        (when-let ((session (antigravity-cli-ide-mcp--get-session-for-project working-dir)))
+        (when-let* ((session (antigravity-cli-ide-mcp--get-session-for-project working-dir)))
           (when (fboundp 'tab-bar--current-tab)
             (setf (antigravity-cli-ide-mcp-session-original-tab session) (tab-bar--current-tab))))))))
 
 (defun antigravity-cli-ide--build-antigravity-command (&optional continue resume _session-id)
+  "Build CLI command string using CONTINUE, RESUME, or _SESSION-ID."
   (let ((cmd antigravity-cli-ide-cli-path))
     (cond
      (continue (setq cmd (concat cmd " -c")))
@@ -643,10 +684,13 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
     cmd))
 
 (defun antigravity-cli-ide--parse-command-string (command-string)
+  "Parse COMMAND-STRING into a program name and argument list."
   (let ((parts (split-string-shell-command command-string)))
     (cons (car parts) (cdr parts))))
 
 (defun antigravity-cli-ide--create-terminal-session (buffer-name working-dir _port continue resume session-id)
+  "Create terminal session for BUFFER-NAME in WORKING-DIR with SESSION-ID.
+CONTINUE and RESUME indicate whether to resume previous sessions."
   (antigravity-cli-ide--terminal-ensure-backend)
   (let* ((cmd-str (antigravity-cli-ide--build-antigravity-command continue resume session-id))
          (default-directory working-dir)
@@ -680,6 +724,7 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
             (cons buffer process))))))))
 
 (defun antigravity-cli-ide--terminal-position-keeper (window-list)
+  "Keep terminal cursor visible across WINDOW-LIST."
   (dolist (win window-list)
     (if (eq win 'buffer)
         (goto-char (eat-term-display-cursor eat-terminal))
@@ -693,6 +738,7 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
             (with-selected-window win (goto-char tp) (recenter)))))))))
 
 (defun antigravity-cli-ide--start-session (&optional continue resume)
+  "Start or focus Antigravity CLI session with CONTINUE or RESUME."
   (unless (antigravity-cli-ide--ensure-cli)
     (user-error "Antigravity CLI ('agy' executable) not found in PATH"))
   
@@ -790,7 +836,7 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
   (interactive)
   (let* ((working-dir (antigravity-cli-ide--get-working-directory))
          (buffer-name (antigravity-cli-ide--get-buffer-name)))
-    (if-let ((buffer (get-buffer buffer-name)))
+    (if-let* ((buffer (get-buffer buffer-name)))
         (progn
           (kill-buffer buffer)
           (antigravity-cli-ide-log "Stopping Antigravity session in %s..." working-dir))
@@ -801,11 +847,11 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
   "Switch to the Antigravity CLI buffer."
   (interactive)
   (let ((buffer-name (antigravity-cli-ide--get-buffer-name)))
-    (if-let ((buffer (get-buffer buffer-name)))
-        (if-let ((window (get-buffer-window buffer)))
+    (if-let* ((buffer (get-buffer buffer-name)))
+        (if-let* ((window (get-buffer-window buffer)))
             (select-window window)
           (antigravity-cli-ide--display-buffer-in-side-window buffer))
-      (user-error "No Antigravity CLI session running. Use M-x antigravity-cli-ide to start"))))
+      (user-error "No Antigravity CLI session running.  Use M-x antigravity-cli-ide to start"))))
 
 ;;;###autoload
 (defun antigravity-cli-ide-list-sessions ()
@@ -821,14 +867,14 @@ If found in a fallback directory, add that directory to `exec-path' and `PATH'."
           (when choice
             (let* ((directory (alist-get choice sessions nil nil #'string=))
                    (buffer-name (funcall antigravity-cli-ide-buffer-name-function directory)))
-              (if-let ((buffer (get-buffer buffer-name)))
+              (if-let* ((buffer (get-buffer buffer-name)))
                   (antigravity-cli-ide--display-buffer-in-side-window buffer)
                 (user-error "Buffer for session %s no longer exists" choice)))))
       (antigravity-cli-ide-log "No active Antigravity sessions"))))
 
 ;;;###autoload
 (defun antigravity-cli-ide-insert-at-mentioned ()
-  "Insert the current buffer's file or region as context into the Antigravity prompt.
+  "Insert the current buffer's file or region context into prompt.
 Sends `@file' (or `@file:start-end' if a region is active) to the terminal
 and switches focus to the Antigravity window."
   (interactive)
@@ -839,7 +885,7 @@ and switches focus to the Antigravity window."
            (buffer-name (antigravity-cli-ide--get-buffer-name working-dir))
            (term-buffer (get-buffer buffer-name)))
       (unless (and term-buffer (buffer-live-p term-buffer))
-        (user-error "No active Antigravity session. Start one with M-x antigravity-cli-ide"))
+        (user-error "No active Antigravity session.  Start one with M-x antigravity-cli-ide"))
       ;; Ensure window is displayed
       (let ((window (get-buffer-window term-buffer)))
         (unless window
@@ -873,7 +919,7 @@ and switches focus to the Antigravity window."
 
 ;;;###autoload
 (defun antigravity-cli-ide-send-prompt (&optional prompt)
-  "Send prompt to terminal.
+  "Send PROMPT string to terminal.
 When `antigravity-cli-ide-auto-prefix-prompt' is non-nil, automatically
 pre-fills the prompt input with the active companion file context."
   (interactive)

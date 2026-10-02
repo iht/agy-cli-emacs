@@ -1,9 +1,11 @@
 ;;; antigravity-cli-ide-emacs-tools.el --- Emacs MCP tools for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
-;; Keywords: ai, antigravity, mcp, tools, xref, emacs
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; This file is not part of GNU Emacs.
 
@@ -47,7 +49,7 @@
 FILE-PATH specifies which file's buffer context to use for the search.
 This function uses the session context to operate in the correct project."
   (if (not file-path)
-      (error "file_path parameter is required. Please specify the file where you want to search for %s" identifier)
+      (error "File_path parameter is required.  Please specify the file where you want to search for %s" identifier)
     (antigravity-cli-ide-mcp-server-with-session-context nil
       (let ((target-buffer (or (find-buffer-visiting file-path)
                                (find-file-noselect file-path)))
@@ -80,7 +82,7 @@ This function uses the session context to operate in the correct project."
 FILE-PATH specifies which file's buffer context to use for the search.
 This function uses the session context to operate in the correct project."
   (if (not file-path)
-      (error "file_path parameter is required. Please specify the file where you want to search for pattern %s" pattern)
+      (error "File_path parameter is required.  Please specify the file where you want to search for pattern %s" pattern)
     (antigravity-cli-ide-mcp-server-with-session-context nil
       (let ((target-buffer (or (find-buffer-visiting file-path)
                                (find-file-noselect file-path)))
@@ -136,7 +138,7 @@ Returns project directory, active buffer, and file count."
   "List all symbols in FILE-PATH using imenu.
 Returns a list of symbols with their types and positions."
   (if (not file-path)
-      (error "file_path parameter is required")
+      (error "File_path parameter is required")
     (antigravity-cli-ide-mcp-server-with-session-context nil
       (condition-case err
           (let ((target-buffer (or (find-buffer-visiting file-path)
@@ -216,7 +218,7 @@ MAX-DEPTH is the maximum depth to traverse."
            (child-count (treesit-node-child-count node)))
       ;; Add children
       (dotimes (i child-count)
-        (when-let ((child (treesit-node-child node i)))
+        (when-let* ((child (treesit-node-child node i)))
           (setq result (concat result
                                (antigravity-cli-ide-mcp-treesit--format-tree
                                 child (1+ level) max-depth)))))
@@ -239,10 +241,11 @@ If neither position is specified, defaults to current cursor position (point).
 If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
 If INCLUDE_CHILDREN is non-nil, include child nodes."
   (if (not file-path)
-      (error "file_path parameter is required")
+      (error "File_path parameter is required")
     (antigravity-cli-ide-mcp-server-with-session-context nil
       (condition-case err
-          (if (not (treesit-available-p))
+          (if (not (and (fboundp 'treesit-available-p)
+                        (treesit-available-p)))
               "Tree-sitter is not available in this Emacs build"
             (let ((target-buffer (or (find-buffer-visiting file-path)
                                      (find-file-noselect file-path))))

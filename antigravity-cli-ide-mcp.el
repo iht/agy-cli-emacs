@@ -1,9 +1,11 @@
 ;;; antigravity-cli-ide-mcp.el --- MCP server for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
-;; Keywords: ai, antigravity, mcp
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; This file is not part of GNU Emacs.
 
@@ -52,7 +54,7 @@
 (defvar-local antigravity-cli-ide-mcp--buffer-cache-valid nil)
 
 ;; Define error type
-(define-error 'mcp-error "MCP Error" 'error)
+(define-error 'antigravity-cli-ide-mcp-error "MCP Error" 'error)
 
 ;;; Session Struct
 
@@ -73,7 +75,7 @@
   "Get the project directory for the current buffer."
   (if antigravity-cli-ide-mcp--buffer-cache-valid
       antigravity-cli-ide-mcp--buffer-project-cache
-    (let ((project-dir (when-let ((project (project-current)))
+    (let ((project-dir (when-let* ((project (project-current)))
                          (expand-file-name (project-root project)))))
       (setq antigravity-cli-ide-mcp--buffer-project-cache project-dir
             antigravity-cli-ide-mcp--buffer-cache-valid t)
@@ -86,16 +88,16 @@
 
 (defun antigravity-cli-ide-mcp--get-current-session ()
   "Get the MCP session for the current buffer's project."
-  (when-let ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
+  (when-let* ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
     (antigravity-cli-ide-mcp--get-session-for-project project-dir)))
 
 (defun antigravity-cli-ide-mcp--find-session-by-proc (proc)
   "Find session with client process PROC."
   (let ((found-session nil))
     (maphash (lambda (_dir session)
-               (when (eq (antigravity-cli-ide-mcp-session-proc session) proc)
-                 (setq found-session session)))
-             antigravity-cli-ide-mcp--sessions)
+                (when (eq (antigravity-cli-ide-mcp-session-proc session) proc)
+                  (setq found-session session)))
+              antigravity-cli-ide-mcp--sessions)
     found-session))
 
 (defun antigravity-cli-ide-mcp--active-sessions ()
@@ -116,7 +118,7 @@
   (expand-file-name "~/.gemini/antigravity-cli/mcp_config.json"))
 
 (defun antigravity-cli-ide-mcp--update-mcp-config (port _project-dir _session-id)
-  "Dynamically write this session's connection configuration to global mcp_config.json."
+  "Write PORT connection configuration to global mcp_config.json."
   (let* ((config-path (antigravity-cli-ide-mcp--get-mcp-config-path))
          (config-dir (file-name-directory config-path))
          (config (if (file-exists-p config-path)
@@ -163,27 +165,27 @@
 ;;; Server Communication Protocol
 
 (defun antigravity-cli-ide-mcp--make-response (id result)
-  "Build JSON-RPC response."
+  "Build JSON-RPC response for request ID with RESULT."
   `((jsonrpc . "2.0")
     (id . ,id)
     (result . ,result)))
 
 (defun antigravity-cli-ide-mcp--make-error-response (id code message)
-  "Build JSON-RPC error response."
+  "Build JSON-RPC error response for request ID, CODE, and MESSAGE."
   `((jsonrpc . "2.0")
     (id . ,id)
     (error . ((code . ,code)
               (message . ,message)))))
 
 (defun antigravity-cli-ide-mcp--send-response (proc response)
-  "Send RESPONSE JSON line to PROC."
+  "Send RESPONSE JSON line to client PROC."
   (when (and proc (process-live-p proc))
     (let ((json-line (concat (json-encode response) "\n")))
       (antigravity-cli-ide-debug "MCP Sending: %s" (string-trim json-line))
       (process-send-string proc json-line))))
 
 (defun antigravity-cli-ide-mcp--handle-initialize (id)
-  "Handle initialize RPC."
+  "Handle initialize RPC request with ID."
   (let ((resp `((protocolVersion . "2024-11-05")
                 (capabilities . ((tools . ((listChanged . :json-false)))))
                 (serverInfo . ((name . "antigravity-cli-ide-mcp")
@@ -191,7 +193,7 @@
     (antigravity-cli-ide-mcp--make-response id resp)))
 
 (defun antigravity-cli-ide-mcp--handle-tools-list (id)
-  "Handle tools/list RPC."
+  "Handle tools/list RPC request with ID."
   (setq antigravity-cli-ide-mcp-tools (antigravity-cli-ide-mcp--build-tool-list))
   (setq antigravity-cli-ide-mcp-tool-schemas (antigravity-cli-ide-mcp--build-tool-schemas))
   (setq antigravity-cli-ide-mcp-tool-descriptions (antigravity-cli-ide-mcp--build-tool-descriptions))
@@ -210,7 +212,7 @@
     (antigravity-cli-ide-mcp--make-response id `((tools . ,(vconcat (nreverse tools)))))))
 
 (defun antigravity-cli-ide-mcp--handle-tools-call (id params proc)
-  "Handle tools/call RPC."
+  "Handle tools/call RPC request ID with PARAMS from client PROC."
   (let* ((tool-name (alist-get 'name params))
          (arguments (alist-get 'arguments params))
          (handler (alist-get tool-name antigravity-cli-ide-mcp-tools nil nil #'string=))
@@ -227,14 +229,14 @@
                       (puthash storage-key id (antigravity-cli-ide-mcp-session-deferred session)))
                     nil) ; Respond later
                 (antigravity-cli-ide-mcp--make-response id `((content . ,result)))))
-          (mcp-error
+          (antigravity-cli-ide-mcp-error
            (antigravity-cli-ide-mcp--make-error-response id -32603 (cadr err)))
           (error
            (antigravity-cli-ide-mcp--make-error-response id -32603 (error-message-string err))))
       (antigravity-cli-ide-mcp--make-error-response id -32601 (format "Unknown tool: %s" tool-name)))))
 
 (defun antigravity-cli-ide-mcp--dispatch-message (proc msg)
-  "Process a parsed JSON-RPC message from MSG."
+  "Process a parsed JSON-RPC message MSG from client PROC."
   (let ((id (alist-get 'id msg))
         (method (alist-get 'method msg))
         (params (alist-get 'params msg)))
@@ -258,7 +260,8 @@
 ;;; Deferred completion function called from ediff handlers
 
 (defun antigravity-cli-ide-mcp-complete-deferred (session tool-name result &optional unique-key)
-  "Complete a deferred tool call response with RESULT."
+  "Complete a deferred TOOL-NAME response with RESULT for SESSION.
+Optional UNIQUE-KEY provides additional specificity."
   (let* ((lookup-key (if unique-key (format "%s-%s" tool-name unique-key) tool-name))
          (session-deferred (antigravity-cli-ide-mcp-session-deferred session))
          (id (gethash lookup-key session-deferred)))
@@ -272,7 +275,7 @@
 ;;; TCP Server lifecycle and filtering
 
 (defun antigravity-cli-ide-mcp--server-filter (proc string)
-  "Standard network filter to handle newline-delimited stream fragmentation."
+  "Network filter for PROC handling newline-delimited STRING."
   (let* ((old-buf (or (process-get proc 'buffer) ""))
          (new-buf (concat old-buf string))
          (lines (split-string new-buf "\n")))
@@ -286,7 +289,7 @@
            (antigravity-cli-ide-debug "JSON Parse Error on line: %s" line)))))))
 
 (defun antigravity-cli-ide-mcp--server-sentinel (proc event)
-  "Sentinel to manage client TCP connections."
+  "Sentinel to manage client TCP connection PROC on EVENT."
   (antigravity-cli-ide-debug "Client event: %s" (string-trim event))
   (cond
    ((string-match-p "open" event)
@@ -331,7 +334,7 @@
 ;;; Session Life Cycle APIs
 
 (defun antigravity-cli-ide-mcp-start-session (project-dir session-id)
-  "Start a new network server session."
+  "Start a new network server session for PROJECT-DIR and SESSION-ID."
   (antigravity-cli-ide-debug "Starting MCP session for %s" project-dir)
   (let* ((server-info (antigravity-cli-ide-mcp--find-free-port))
          (server-proc (car server-info))
@@ -353,15 +356,15 @@
     port))
 
 (defun antigravity-cli-ide-mcp-stop-session (project-dir)
-  "Stop the TCP MCP session and cleanup configuration."
+  "Stop the TCP MCP session for PROJECT-DIR and cleanup configuration."
   (antigravity-cli-ide-debug "Stopping MCP session for %s" project-dir)
-  (when-let ((session (gethash project-dir antigravity-cli-ide-mcp--sessions)))
+  (when-let* ((session (gethash project-dir antigravity-cli-ide-mcp--sessions)))
     ;; Close client process
-    (when-let ((client (antigravity-cli-ide-mcp-session-proc session)))
+    (when-let* ((client (antigravity-cli-ide-mcp-session-proc session)))
       (when (process-live-p client)
         (delete-process client)))
     ;; Close server process
-    (when-let ((server (antigravity-cli-ide-mcp-session-server session)))
+    (when-let* ((server (antigravity-cli-ide-mcp-session-server session)))
       (when (process-live-p server)
         (delete-process server)))
     

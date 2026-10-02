@@ -1,9 +1,11 @@
 ;;; antigravity-cli-ide-debug.el --- Debug logging for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
-;; Keywords: ai, antigravity, mcp, debug
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; This file is not part of GNU Emacs.
 
@@ -23,8 +25,8 @@
 ;;; Commentary:
 
 ;; This file provides debug logging functionality for Antigravity CLI IDE.
-;; It supports structured logging of WebSocket/HTTP messages, JSON-RPC
-;; communication, and general debug information with session context.
+;; It supports structured logging of JSON-RPC communication and general
+;; debug information with session context.
 
 ;;; Code:
 

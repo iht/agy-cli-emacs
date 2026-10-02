@@ -1,6 +1,11 @@
 ;;; antigravity-cli-ide-tests.el --- Tests for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
+
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; Test suite for antigravity-cli-ide.el using ERT
 ;;

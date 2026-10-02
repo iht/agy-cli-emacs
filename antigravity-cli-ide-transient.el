@@ -1,9 +1,11 @@
 ;;; antigravity-cli-ide-transient.el --- Transient menus for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
-;; Keywords: ai, antigravity, transient, menu
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; This file is not part of GNU Emacs.
 
@@ -126,7 +128,7 @@
 
 (defun antigravity-cli-ide--session-status ()
   "Return a string describing the current session status."
-  (if-let ((session (antigravity-cli-ide-mcp--get-current-session)))
+  (if-let* ((session (antigravity-cli-ide-mcp--get-current-session)))
       (let* ((project-dir (antigravity-cli-ide-mcp-session-project-dir session))
              (project-name (file-name-nondirectory (directory-file-name project-dir)))
              (connected (if (antigravity-cli-ide-mcp-session-proc session) "connected" "disconnected")))
@@ -317,7 +319,7 @@
 
 ;;; Transient Menus
 
-;;;###autoload (autoload 'antigravity-cli-ide-menu "antigravity-cli-ide-transient" "Antigravity CLI IDE main menu." t)
+;;;###autoload
 (transient-define-prefix antigravity-cli-ide-menu ()
   "Antigravity CLI IDE main menu."
   [:description antigravity-cli-ide--session-status]

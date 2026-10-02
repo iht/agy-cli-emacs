@@ -1,9 +1,11 @@
 ;;; antigravity-cli-ide-mcp-handlers.el --- MCP tool handlers for Antigravity CLI IDE  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026
+;; Copyright (C) 2025 Yoav Orot
+;; Copyright (C) 2026 Israel Herraiz
 
-;; Author: Yoav Orot (Adapted for Antigravity CLI)
-;; Keywords: ai, antigravity, mcp
+;; Author: Israel Herraiz <isra@herraiz.org>
+;; Maintainer: Israel Herraiz <isra@herraiz.org>
+;; Keywords: tools, processes, convenience, ai, antigravity
 
 ;; This file is not part of GNU Emacs.
 
@@ -103,7 +105,7 @@ Returns the window if found, nil otherwise."
 If SESSION is provided, use it instead of looking up the current session."
   (if session
       (antigravity-cli-ide-mcp-session-active-diffs session)
-    (if-let ((current-session (antigravity-cli-ide-mcp--get-current-session)))
+    (if-let* ((current-session (antigravity-cli-ide-mcp--get-current-session)))
         (antigravity-cli-ide-mcp-session-active-diffs current-session)
       ;; No session found - return nil
       nil)))
@@ -174,7 +176,7 @@ STARTUP-HOOK-FN is the hook function to remove after use."
     ;; Store the control buffer in our diff-info
     (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session))
           (control-buffer ediff-control-buffer))
-      (when-let ((diff-info (gethash tab-name active-diffs)))
+      (when-let* ((diff-info (gethash tab-name active-diffs)))
         (setf (alist-get 'control-buffer diff-info) control-buffer)
         (puthash tab-name diff-info active-diffs)))
 
@@ -240,7 +242,7 @@ ARGUMENTS should contain:
         (start-text (alist-get 'startText arguments))
         (end-text (alist-get 'endText arguments)))
     (unless path
-      (signal 'mcp-error '("Missing required parameter: filePath")))
+      (signal 'antigravity-cli-ide-mcp-error '("Missing required parameter: filePath")))
     (condition-case err
         (progn
           (find-file path)
@@ -288,7 +290,7 @@ ARGUMENTS should contain:
           (list `((type . "text")
                   (text . "FILE_OPENED"))))
       (error
-       (signal 'mcp-error (list (format "Failed to open file: %s"
+       (signal 'antigravity-cli-ide-mcp-error (list (format "Failed to open file: %s"
                                          (error-message-string err))))))))
 
 (defun antigravity-cli-ide-mcp-handle-get-diagnostics (arguments &optional session)
@@ -312,7 +314,7 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
               (list `((type . "text")
                       (text . "TAB_CLOSED"))))
           ;; Error case
-          (signal 'mcp-error (list (format "No buffer visiting %s" path))))))
+          (signal 'antigravity-cli-ide-mcp-error (list (format "No buffer visiting %s" path))))))
      (tab-name
       ;; Check if it's a diff tab first - need to check all sessions
       (let* ((found-session nil)
@@ -330,7 +332,7 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
         (if found-diff-info
             (progn
               ;; Check if ediff is still active and quit it using stored control buffer
-              (when-let ((control-buf (alist-get 'control-buffer found-diff-info)))
+              (when-let* ((control-buf (alist-get 'control-buffer found-diff-info)))
                 (when (buffer-live-p control-buf)
                   ;; Set a flag in diff-info to indicate this quit is from Antigravity
                   (setf (alist-get 'quit-from-antigravity found-diff-info) t)
@@ -376,9 +378,9 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
                   (list `((type . "text")
                           (text . "TAB_CLOSED"))))
               ;; Error case - VS Code returns isError: true
-              (signal 'mcp-error (list (format "No buffer named %s" tab-name))))))))
+              (signal 'antigravity-cli-ide-mcp-error (list (format "No buffer named %s" tab-name))))))))
      (t
-      (signal 'mcp-error '("Either 'path' or 'tab_name' must be provided"))))))
+      (signal 'antigravity-cli-ide-mcp-error '("Either 'path' or 'tab_name' must be provided"))))))
 
 (defun antigravity-cli-ide-mcp-handle-open-diff (arguments)
   "Open a diff view using ediff.
@@ -394,7 +396,7 @@ ARGUMENTS should contain:
         session)
     ;; Validate required parameters
     (unless (and old-file-path new-file-path new-file-contents tab-name)
-      (signal 'mcp-error '("Missing required parameters for openDiff")))
+      (signal 'antigravity-cli-ide-mcp-error '("Missing required parameters for openDiff")))
 
     ;; Try to find session based on the file being diffed first
     (setq session (or (antigravity-cli-ide-mcp--find-session-for-file old-file-path)
@@ -403,12 +405,12 @@ ARGUMENTS should contain:
 
     ;; Ensure we have a valid session
     (unless session
-      (signal 'mcp-error '("No active MCP session found")))
+      (signal 'antigravity-cli-ide-mcp-error '("No active MCP session found")))
 
     ;; Get the active diffs for this specific session
     (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session)))
       ;; Check if there's already a diff with this tab_name
-      (when-let ((existing-diff (gethash tab-name active-diffs)))
+      (when-let* ((existing-diff (gethash tab-name active-diffs)))
         ;; Clean up existing diff
         (antigravity-cli-ide-mcp--cleanup-diff tab-name session)))
 
@@ -567,7 +569,7 @@ session."
   "Clean up diff session for TAB-NAME.
 SESSION is the MCP session to use - if not provided, tries to determine it."
   (let ((active-diffs (antigravity-cli-ide-mcp--get-active-diffs session)))
-    (when-let ((diff-info (gethash tab-name active-diffs)))
+    (when-let* ((diff-info (gethash tab-name active-diffs)))
       ;; If session wasn't provided, try to get it from diff-info
       (unless session
         (setq session (alist-get 'session diff-info)))
@@ -622,9 +624,9 @@ SESSION is the MCP session to use - if not provided, tries to determine it."
                      (setq closed-count (1+ closed-count)))
                    session-diffs))
       ;; Fallback to project directory if no current session
-      (when-let ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
-        (when-let ((session (antigravity-cli-ide-mcp--get-session-for-project
-                             project-dir)))
+      (when-let* ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
+        (when-let* ((session (antigravity-cli-ide-mcp--get-session-for-project
+                              project-dir)))
           (let ((session-diffs (antigravity-cli-ide-mcp-session-active-diffs session)))
             (maphash (lambda (tab-name _diff-info)
                        (antigravity-cli-ide-mcp--cleanup-diff tab-name session)
@@ -640,13 +642,13 @@ ARGUMENTS should contain:
 - `code': The Elisp expression to evaluate."
   (let ((code (alist-get 'code arguments)))
     (unless code
-      (signal 'mcp-error '("Missing required parameter: code")))
+      (signal 'antigravity-cli-ide-mcp-error '("Missing required parameter: code")))
     (condition-case err
         (let* ((result (eval (car (read-from-string code)) t))
                (output (format "%S" result)))
           (list `((type . "text") (text . ,output))))
       (error
-       (signal 'mcp-error (list (format "Evaluation error: %s" (error-message-string err))))))))
+       (signal 'antigravity-cli-ide-mcp-error (list (format "Evaluation error: %s" (error-message-string err))))))))
 
 (defun antigravity-cli-ide-mcp-handle-get-current-context (_arguments)
   "Get the editor context from the companion buffer in Emacs.

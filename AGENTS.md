@@ -74,17 +74,16 @@ Antigravity CLI communicates with external tools using standard JSON-RPC over st
 | [`antigravity-cli-ide-diagnostics.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-diagnostics.el) | **Compiler Diagnostics**: Unifies `flymake` and `flycheck` diagnostic data, transforming them into standard LSP/VS Code diagnostic structures. |
 | [`antigravity-cli-ide-transient.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-transient.el) | **Interactive UI**: The `transient` menu system (`C-c g` / `antigravity-cli-ide-menu`), configuration submenu, and diagnostics panel. |
 | [`antigravity-cli-ide-debug.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-debug.el) | **Observability**: Structured logging to the `*antigravity-cli-ide-debug*` buffer. |
-| [`antigravity-cli-ide-mcp-server.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-mcp-server.el) | Optional HTTP/Streamable HTTP MCP tools server module. |
-| [`antigravity-cli-ide-mcp-http-server.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-mcp-http-server.el) | HTTP transport primitives for the optional HTTP MCP server. |
+| [`antigravity-cli-ide-mcp-server.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-mcp-server.el) | **MCP Tools Registry**: Tool declarations and session execution context. |
 | [`antigravity-cli-ide-tests.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-tests.el) | **Automated Tests**: ERT test suite validating command generation, session lifecycle, config serialization, buffer naming, and diagnostics mapping. |
-| [`Makefile`](file:///home/ihr/projects/agy-cli-ide/Makefile) | Build automation for byte-compilation, batch ERT test runs, and checkdoc verification. |
-| [`.github/workflows/ci.yml`](file:///home/ihr/projects/agy-cli-ide/.github/workflows/ci.yml) | Continuous Integration running `make compile` and `make test` across Emacs 28.2, 29.4, 30.1, and snapshot. |
+| [`Makefile`](file:///home/ihr/projects/agy-cli-ide/Makefile) | Build automation for byte-compilation, batch ERT test runs, checkdoc verification, and package-lint. |
+| [`.github/workflows/ci.yml`](file:///home/ihr/projects/agy-cli-ide/.github/workflows/ci.yml) | Continuous Integration running `make compile`, `make checkdoc`, and `make test` across Emacs 29.4, 30.1, and snapshot, plus `package-lint`. |
 
 ---
 
 ## 4. Technology Stack & Runtime Requirements
 
-- **GNU Emacs**: Version `28.1` or higher.
+- **GNU Emacs**: Version `29.1` or higher (providing native Tree-sitter AST support).
 - **Lexical Binding**: Strict requirement for `lexical-binding: t` on line 1 of every `.el` module.
 - **Required Packages**:
   - `transient` (`>= 0.9.0`) for the interactive control panel.
@@ -173,6 +172,7 @@ All development tasks are automated via the repository [`Makefile`](file:///home
 | `make compile` | Byte-compile all Emacs Lisp source files |
 | `make all` | Run byte-compilation followed by the test suite (default target) |
 | `make checkdoc` | Run `checkdoc` style and documentation inspection across source files |
+| `make lint` | Run `package-lint` package conventions inspection across source files |
 | `make clean` | Remove all generated `.elc` compiled bytecode artifacts |
 | `make help` | Display list of available Makefile targets |
 
@@ -190,4 +190,5 @@ All development tasks are automated via the repository [`Makefile`](file:///home
   - `chore(<scope>): description`
 - **Quality Gates**:
   - `make all` must pass cleanly before any merge or release.
-  - Ensure zero regressions in byte-compilation or ERT tests across supported Emacs versions (28.2+).
+  - `make lint` must pass cleanly without package-lint warnings or errors.
+  - Ensure zero regressions in byte-compilation or ERT tests across supported Emacs versions (29.1+).
