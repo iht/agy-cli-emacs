@@ -14,9 +14,9 @@ This plan outlines the steps required to resolve the Emacs batch testing environ
   - [x] Attach git note with task summary
 
 ## Phase 3: Final Verification
-- [ ] Task: Run automated ERT tests in batch mode and check quality gates
-  - [ ] Run the complete test suite to ensure all tests pass
-  - [ ] Verify that test coverage is high and no other lints are introduced
-  - [ ] Stage all code changes and perform task commit
-  - [ ] Attach git note with task summary
+- [x] eda4929 Task: Run automated ERT tests in batch mode and check quality gates
+  - [x] Run the complete test suite to ensure all tests pass
+  - [x] Verify that test coverage is high and no other lints are introduced
+  - [x] Stage all code changes and perform task commit
+  - [x] Attach git note with task summary
 - [ ] Task: Conductor - User Manual Verification 'Final Verification' (Protocol in workflow.md)
