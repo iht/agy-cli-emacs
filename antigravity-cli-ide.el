@@ -440,13 +440,42 @@
 
 ;;; CLI Detection
 
+(defun antigravity-cli-ide--find-cli ()
+  "Locate the Antigravity CLI executable.
+If `antigravity-cli-ide-cli-path' is an absolute path, return it if executable.
+Otherwise, search `exec-path', then fallback to common installation directories
+such as ~/.local/bin and ~/.gemini/antigravity-cli/bin.
+If found in a fallback directory, add that directory to `exec-path' and `PATH'."
+  (cond
+   ((and (file-name-absolute-p antigravity-cli-ide-cli-path)
+         (file-executable-p antigravity-cli-ide-cli-path))
+    antigravity-cli-ide-cli-path)
+   ((executable-find antigravity-cli-ide-cli-path))
+   (t
+    (let* ((dirs (list (expand-file-name "~/.local/bin")
+                       (expand-file-name "~/.gemini/antigravity-cli/bin")
+                       (expand-file-name "~/bin")))
+           (found (cl-loop for dir in dirs
+                           for candidate = (expand-file-name antigravity-cli-ide-cli-path dir)
+                           when (file-executable-p candidate)
+                           return candidate)))
+      (when found
+        (let ((bin-dir (directory-file-name (file-name-directory found))))
+          (add-to-list 'exec-path bin-dir)
+          (setenv "PATH" (concat bin-dir ":" (getenv "PATH")))))
+      found))))
+
 (defun antigravity-cli-ide--detect-cli ()
-  (let ((available (condition-case nil
-                       (eq (call-process antigravity-cli-ide-cli-path nil nil nil "changelog") 0)
-                     (error nil))))
-    (setq antigravity-cli-ide--cli-available available)))
+  "Detect if Antigravity CLI is available."
+  (let* ((cli (antigravity-cli-ide--find-cli))
+         (available (and cli
+                         (condition-case nil
+                             (eq (call-process cli nil nil nil "--version") 0)
+                           (error nil)))))
+    (setq antigravity-cli-ide--cli-available (if available t nil))))
 
 (defun antigravity-cli-ide--ensure-cli ()
+  "Ensure Antigravity CLI is available, detect if needed."
   (unless antigravity-cli-ide--cli-available (antigravity-cli-ide--detect-cli))
   antigravity-cli-ide--cli-available)
 

@@ -140,16 +140,17 @@
   "Show detailed version information for Antigravity CLI."
   (interactive)
   (if (antigravity-cli-ide--ensure-cli)
-      (let ((version-output
-             (with-temp-buffer
-               (call-process antigravity-cli-ide-cli-path nil t nil "changelog")
-               (buffer-string))))
+      (let* ((cli (or (executable-find antigravity-cli-ide-cli-path)
+                      antigravity-cli-ide-cli-path))
+             (version-output
+              (with-temp-buffer
+                (call-process cli nil t nil "--version")
+                (string-trim (buffer-string)))))
         (with-output-to-temp-buffer "*Antigravity CLI Info*"
           (princ "Antigravity CLI Information\n")
           (princ "===========================\n\n")
-          (princ version-output)
-          (princ "\n\nExecutable path: ")
-          (princ (executable-find antigravity-cli-ide-cli-path))))
+          (princ (format "Version: %s\n" version-output))
+          (princ (format "Executable path: %s\n" (executable-find antigravity-cli-ide-cli-path)))))
     (user-error "Antigravity CLI not available")))
 
 (defun antigravity-cli-ide-show-mcp-sessions ()

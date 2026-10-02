@@ -106,5 +106,15 @@
                  (servers (cdr (assoc 'mcpServers config))))
             (should-not (assoc 'antigravity-emacs-tools servers))))))))
 
+(ert-deftest test-antigravity-cli-ide-find-cli ()
+  "Verify that antigravity-cli-ide--find-cli resolves CLI even if not in standard exec-path."
+  (let ((antigravity-cli-ide-cli-path "agy")
+        (antigravity-cli-ide--cli-available nil))
+    (let ((found (antigravity-cli-ide--find-cli)))
+      (when (file-executable-p (expand-file-name "~/.local/bin/agy"))
+        (should found)
+        (should (file-executable-p found))
+        (should (antigravity-cli-ide--ensure-cli))))))
+
 (provide 'antigravity-cli-ide-tests)
 ;;; antigravity-cli-ide-tests.el ends here
