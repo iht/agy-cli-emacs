@@ -4,6 +4,7 @@
 ;; Copyright (C) 2026 Israel Herraiz
 
 ;; Author: Israel Herraiz <isra@herraiz.org>
+;; Assisted-by: Google Antigravity:gemini-3.8-flash
 ;; Maintainer: Israel Herraiz <isra@herraiz.org>
 ;; Keywords: tools, processes, convenience, ai, antigravity
 
