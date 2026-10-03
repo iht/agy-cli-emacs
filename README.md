@@ -10,20 +10,19 @@ It is a functional clone in capability of `claude-code-ide.el` but optimized to 
 
 Since `agy` supports the Model Context Protocol (MCP) using a standard stdio command configured in `mcp_config.json`, we leverage the built-in Unix/Linux utility **`nc` (netcat)** to pipe RPC streams natively to Emacs:
 
-```
-[ Antigravity CLI (agy) ]
-        ▲
-        │ stdio JSON-RPC
-        ▼
-[ nc (netcat) process ]  <--- Launched automatically by agy
-        ▲
-        │ Local TCP stream (127.0.0.1:port)
-        ▼
-[ Emacs Built-in TCP Server ] (make-network-process)
-        ▲
-        │ Native Elisp handler
-        ▼
-[ Emacs Buffers, AST & Tools ]
+```mermaid
+flowchart TD
+    agy["Antigravity CLI (agy)"]
+    nc["nc (netcat) process — launched automatically by agy"]
+
+    subgraph emacs["GNU Emacs"]
+        tcp["Built-in TCP server (make-network-process)"]
+        tools["Buffers, AST & tools"]
+    end
+
+    agy <-->|"stdio JSON-RPC"| nc
+    nc <-->|"Local TCP stream (127.0.0.1:port)"| tcp
+    tcp <-->|"Native Elisp handler"| tools
 ```
 
 1. **Emacs Plain TCP Server**: When an Antigravity session starts, Emacs binds to a random free TCP port (e.g., `12345`) using its highly optimized C-level `make-network-process` API.
