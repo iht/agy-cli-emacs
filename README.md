@@ -1,42 +1,66 @@
 # Antigravity CLI IDE for Emacs
 
-Antigravity CLI IDE for Emacs provides native integration with the `antigravity-cli` (`agy`) executable through the Model Context Protocol (MCP). Unlike simple terminal wrappers, this package creates a bidirectional bridge between Antigravity and Emacs, enabling the assistant to understand and leverage Emacs' powerful features—from LSP and project management to custom Elisp functions.
+**Native GNU Emacs IDE integration for Google Antigravity CLI (`agy`)** powered by a zero-dependency **Model Context Protocol (MCP)** bridge.
 
-It is a functional clone in capability of `claude-code-ide.el` but optimized to use a **pure TCP socket server** and a **netcat (`nc`) pipeline**, eliminating the need for complex external bridge processes, Node.js, Python, or heavy third-party Emacs packages (no `websocket.el` or `web-server.el` required).
+Unlike simple terminal wrappers, `antigravity-cli-ide` creates a bidirectional integration between Antigravity and GNU Emacs:
+- **Rich IDE Environment**: Seamless terminal sessions (`vterm` or `eat`) hosted in dedicated side-windows, companion buffer tracking for `@file` context injection into CLI prompts, and a comprehensive `transient` menu (`C-c g`).
+- **Zero-Dependency MCP Tool Bridge**: Emacs acts as an official MCP server, allowing Antigravity to directly inspect compiler diagnostics (Flymake/Flycheck), run AST syntax queries (Tree-sitter), navigate code definitions (Xref/LSP), perform interactive diffing (Ediff), and open buffers.
+- **Pure Netcat-to-TCP Architecture**: Emacs uses its built-in C-level TCP socket server (`make-network-process`) paired with the standard Unix/Linux `nc` (netcat) utility. No Node.js, Python sidecar, `websocket.el`, or `web-server.el` dependencies are required.
 
 ---
 
-## 🚀 How the Netcat-to-TCP Architecture Works
+## 🚀 Architecture & Data Flow
 
-Since `agy` supports the Model Context Protocol (MCP) using a standard stdio command configured in `mcp_config.json`, we leverage the built-in Unix/Linux utility **`nc` (netcat)** to pipe RPC streams natively to Emacs:
+When a session starts, Emacs provisions a local TCP socket, dynamically configures `~/.gemini/antigravity-cli/mcp_config.json`, and launches `agy` in a dedicated terminal window:
 
 ```mermaid
 flowchart TD
-    agy["Antigravity CLI (agy)"]
-    nc["nc (netcat) process — launched automatically by agy"]
+    subgraph ide["GNU Emacs — IDE Environment"]
+        direction TB
+        subgraph terminal["Terminal Workspace"]
+            side_win["Dedicated Side-Window (vterm / eat)"]
+            companion["Companion Buffer Context (@file insertion)"]
+            transient_ui["Transient Menu (C-c g)"]
+        end
 
-    subgraph emacs["GNU Emacs"]
-        tcp["Built-in TCP server (make-network-process)"]
-        tools["Buffers, AST & tools"]
+        subgraph emacs_mcp["Zero-Dependency MCP Server"]
+            tcp["Built-in TCP Server\n(make-network-process on 127.0.0.1:port)"]
+            rpc_parser["MCP JSON-RPC Parser\n(initialize, tools/list, tools/call)"]
+            tools["Editor Tools:\n• openFile & openDiff (Ediff)\n• getDiagnostics (Flymake / Flycheck)\n• LSP / xref, imenu & tree-sitter AST\n• Elisp eval & buffer context"]
+        end
     end
 
-    agy <-->|"stdio JSON-RPC"| nc
-    nc <-->|"Local TCP stream (127.0.0.1:port)"| tcp
-    tcp <-->|"Native Elisp handler"| tools
+    subgraph agy_process["Google Antigravity CLI (agy)"]
+        agy_core["Antigravity Agent Core"]
+        mcp_cfg["Dynamic MCP Config\n(~/.gemini/antigravity-cli/mcp_config.json)"]
+        nc["nc (netcat) process\n(Stdio-to-TCP MCP Translator)"]
+    end
+
+    side_win -->|"Runs agy process"| agy_core
+    transient_ui -.->|"Controls session"| side_win
+    companion -.->|"Injects file references"| side_win
+
+    emacs_mcp -.->|"1. Injects server config on start"| mcp_cfg
+    mcp_cfg -->|"2. agy reads config on launch"| agy_core
+    agy_core <-->|"3. Stdio MCP JSON-RPC"| nc
+    nc <-->|"4. Loopback TCP (127.0.0.1:port)"| tcp
+    tcp <--> rpc_parser
+    rpc_parser <--> tools
 ```
 
-1. **Emacs Plain TCP Server**: When an Antigravity session starts, Emacs binds to a random free TCP port (e.g., `12345`) using its highly optimized C-level `make-network-process` API.
-2. **Global MCP Auto-Config**: Emacs dynamically writes the server details to your global `~/.gemini/antigravity-cli/mcp_config.json` before startup:
+### Session Lifecycle
+1. **TCP Socket Allocation**: Emacs finds a free port in `antigravity-cli-ide-mcp-port-range` (10000–65535) and starts a native TCP server bound exclusively to `127.0.0.1` using `make-network-process`.
+2. **Dynamic MCP Config Injection**: Emacs safely reads `~/.gemini/antigravity-cli/mcp_config.json` (preserving all existing custom servers) and registers the bridge:
    ```json
    "mcpServers": {
      "antigravity-emacs-tools": {
        "command": "nc",
-       "args": ["127.0.0.1", "12345"]
+       "args": ["127.0.0.1", "<PORT>"]
      }
    }
    ```
-3. **Interactive Terminal Session**: Emacs launches the `agy` process in a dedicated `vterm` or `eat` buffer. As `agy` starts up, it reads `mcp_config.json`, starts `nc` as its MCP connector, and establishes an instant, zero-dependency, bidirectional TCP channel to Emacs.
-4. **Session Cleanup**: When you quit or kill the terminal buffer, Emacs automatically shuts down the TCP socket and restores the `mcp_config.json` to its original state.
+3. **Interactive Terminal Launch**: Emacs opens a dedicated `vterm` or `eat` buffer in a side window running `agy`. As `agy` initializes, it reads `mcp_config.json`, starts `nc` as its MCP connector, and establishes a bidirectional TCP stream back to Emacs.
+4. **Clean Restoration & Teardown**: When the session ends or the terminal buffer is killed, Emacs stops the TCP server, removes the `antigravity-emacs-tools` entry, and cleanly restores `mcp_config.json`.
 
 ---
 
@@ -114,5 +138,15 @@ You can compile all files and execute the ERT test suite using the included `Mak
 * `make all` - Byte-compile all source files and run the test suite (default target)
 * `make clean` - Remove generated `.elc` compiled artifacts
 * `make checkdoc` - Run checkdoc style inspection on source files
+* `make lint` - Run package-lint packaging conventions inspection
 * `make help` - Show available Makefile targets
+
+---
+
+## 📄 License
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+See the [LICENSE](LICENSE) file for complete details.
+
 

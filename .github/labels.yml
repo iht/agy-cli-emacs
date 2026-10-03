@@ -1,0 +1,92 @@
+# GitHub repository labels configuration for antigravity-cli-ide
+
+# Types
+- name: "bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "enhancement"
+  color: "a2eeef"
+  description: "New feature or request"
+
+- name: "documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "refactor"
+  color: "fbca04"
+  description: "Code refactoring and modernization"
+
+- name: "performance"
+  color: "d4c5f9"
+  description: "Performance improvements and optimizations"
+
+- name: "testing"
+  color: "bfdadc"
+  description: "Unit tests, ERT suite, CI testing"
+
+- name: "maintenance"
+  color: "c5def5"
+  description: "Chores, dependencies, and repo hygiene"
+
+# Areas / Components
+- name: "area:mcp"
+  color: "1d76db"
+  description: "Model Context Protocol bridge, TCP server, JSON-RPC"
+
+- name: "area:terminal"
+  color: "0052cc"
+  description: "Terminal backends (vterm, eat, term)"
+
+- name: "area:tools"
+  color: "5319e7"
+  description: "Emacs context tools (xref, tree-sitter, imenu)"
+
+- name: "area:diagnostics"
+  color: "b60205"
+  description: "Compiler diagnostics (flymake, flycheck)"
+
+- name: "area:ediff"
+  color: "0e8a16"
+  description: "Ediff and interactive buffer diffing"
+
+- name: "area:transient"
+  color: "e99695"
+  description: "Interactive transient UI and menus"
+
+- name: "area:packaging"
+  color: "f9d0c4"
+  description: "MELPA, NonGNU ELPA, metadata, packaging"
+
+- name: "area:ci"
+  color: "333333"
+  description: "Continuous Integration, GitHub Actions, Makefile"
+
+# Status & Triage
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention is needed"
+
+- name: "question"
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: "duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "invalid"
+  color: "e4e669"
+  description: "This doesn't seem right"
+
+- name: "wontfix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+- name: "upstream"
+  color: "fef2c0"
+  description: "Issue in upstream Antigravity CLI (agy) or external tool"

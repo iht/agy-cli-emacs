@@ -1,0 +1,92 @@
+name: Bug Report
+description: Report a defect, error, or unexpected behavior in antigravity-cli-ide
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much detail as possible to help reproduce and resolve the problem.
+  - type: input
+    id: emacs-version
+    attributes:
+      label: Emacs Version
+      description: Run `M-x emacs-version` and paste the output.
+      placeholder: "e.g. GNU Emacs 29.4 (build 1, x86_64-pc-linux-gnu)"
+    validations:
+      required: true
+  - type: input
+    id: agy-version
+    attributes:
+      label: Antigravity CLI Version
+      description: Run `agy --version` in your terminal and paste the output.
+      placeholder: "e.g. agy 1.0.0"
+    validations:
+      required: false
+  - type: dropdown
+    id: terminal-backend
+    attributes:
+      label: Terminal Backend
+      description: Which terminal backend are you using with antigravity-cli-ide?
+      options:
+        - vterm
+        - eat
+        - term
+        - shell
+        - Other (specify below)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows (WSL)
+        - BSD
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Describe the steps to reproduce the issue.
+      placeholder: |
+        1. Open project in Emacs
+        2. Run `M-x antigravity-cli-ide`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug Logs / Backtrace
+      description: Paste any relevant output from the `*antigravity-cli-ide-debug*` buffer or an Emacs backtrace (`M-x toggle-debug-on-error`).
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Verification Checklist
+      options:
+        - label: I verified that `nc` (netcat) and `agy` are available on my system `$PATH`.
+          required: false
+        - label: I checked existing issues to confirm this hasn't already been reported.
+          required: false

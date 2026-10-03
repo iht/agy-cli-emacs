@@ -78,7 +78,7 @@
 
 (ert-deftest test-antigravity-cli-ide-buffer-naming ()
   "Verify that buffers are dynamically named based on working directories."
-  (let ((dir "/home/ihr/projects/my-test-project"))
+  (let ((dir "/path/to/my-test-project"))
     (should (string= (antigravity-cli-ide--default-buffer-name dir)
                      "*antigravity-cli[my-test-project]*"))))
 

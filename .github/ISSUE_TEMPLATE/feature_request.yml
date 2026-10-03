@@ -1,0 +1,47 @@
+name: Feature Request
+description: Propose a new feature, tool integration, or enhancement for antigravity-cli-ide
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for proposing an enhancement to `antigravity-cli-ide`! Please describe your use case and design ideas below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: Is your feature request related to a problem or limitation? Please describe clearly.
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution or Behavior
+      description: Describe what you would like to see implemented and how it should work in Emacs.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions, packages, or workarounds you have considered.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Component Area
+      description: Which part of the package does this enhancement target?
+      options:
+        - "area:mcp (Model Context Protocol bridge, TCP server, RPC)"
+        - "area:tools (Editor context tools: xref, tree-sitter, imenu)"
+        - "area:terminal (Terminal backends: vterm, eat, term)"
+        - "area:transient (Transient UI & menus)"
+        - "area:diagnostics (Flymake / Flycheck)"
+        - "area:ediff (Ediff & interactive buffer diffing)"
+        - "area:packaging (ELPA / MELPA metadata)"
+        - "Other"
+    validations:
+      required: false
