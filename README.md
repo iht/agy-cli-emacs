@@ -85,7 +85,7 @@ The package consists of the following modules in this directory:
 Add this configuration to your `init.el` or `config.el` to load and configure the package:
 
 ```elisp
-(add-to-list 'load-path "/path/to/agy-cli-ide")
+(add-to-list 'load-path "/path/to/agy-cli-emacs")
 
 (use-package antigravity-cli-ide
   :bind ("C-c g" . antigravity-cli-ide-menu)

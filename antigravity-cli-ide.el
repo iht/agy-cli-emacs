@@ -8,7 +8,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1") (transient "0.9.0"))
 ;; Keywords: tools, processes, convenience, ai, antigravity
-;; URL: https://github.com/herraiz-org/antigravity-cli-ide
+;; URL: https://github.com/iht/agy-cli-emacs
 
 ;; This file is not part of GNU Emacs.
 
