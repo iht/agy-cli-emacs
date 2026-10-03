@@ -7,6 +7,8 @@ Unlike simple terminal wrappers, `antigravity-cli-ide` creates a bidirectional i
 - **Zero-Dependency MCP Tool Bridge**: Emacs acts as an official MCP server, allowing Antigravity to directly inspect compiler diagnostics (Flymake/Flycheck), run AST syntax queries (Tree-sitter), navigate code definitions (Xref/LSP), perform interactive diffing (Ediff), and open buffers.
 - **Pure Netcat-to-TCP Architecture**: Emacs uses its built-in C-level TCP socket server (`make-network-process`) paired with the standard Unix/Linux `nc` (netcat) utility. No Node.js, Python sidecar, `websocket.el`, or `web-server.el` dependencies are required.
 
+Adapted from and inspired by [Yoav Orot's `claude-code-ide.el`](https://github.com/manzaltu/claude-code-ide.el), redesigned from the ground up with a pure TCP loopback bridge requiring zero external dependencies.
+
 ---
 
 ## 🚀 Architecture & Data Flow
@@ -140,6 +142,12 @@ You can compile all files and execute the ERT test suite using the included `Mak
 * `make checkdoc` - Run checkdoc style inspection on source files
 * `make lint` - Run package-lint packaging conventions inspection
 * `make help` - Show available Makefile targets
+
+---
+
+## 🙏 Acknowledgments & Lineage
+
+This package was inspired by and adapted from [**`claude-code-ide.el`**](https://github.com/manzaltu/claude-code-ide.el) by **Yoav Orot**. It redesigns and optimizes the concept specifically for Google Antigravity CLI (`agy`) using a zero-dependency Netcat-to-TCP bridge implementing the Model Context Protocol (MCP).
 
 ---
 
