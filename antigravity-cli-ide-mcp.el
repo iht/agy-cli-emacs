@@ -87,10 +87,38 @@
   (when project-dir
     (gethash project-dir antigravity-cli-ide-mcp--sessions)))
 
+(defun antigravity-cli-ide-mcp--path-in-directory-p (path dir)
+  "Return non-nil if PATH is equal to or inside DIR."
+  (let* ((true-path (if (file-exists-p path) (file-truename path) (expand-file-name path)))
+         (true-dir (if (file-exists-p dir) (file-truename dir) (expand-file-name dir)))
+         (dir-as-dir (file-name-as-directory true-dir))
+         (path-as-dir (file-name-as-directory true-path)))
+    (or (string= (directory-file-name true-path) (directory-file-name true-dir))
+        (string-prefix-p dir-as-dir path-as-dir)
+        (string-prefix-p dir-as-dir true-path))))
+
+(defun antigravity-cli-ide-mcp--find-best-matching-session (path)
+  "Find the most specific active MCP session containing PATH.
+Returns the session whose project-dir is the deepest ancestor of PATH."
+  (when path
+    (let ((best-session nil)
+          (best-len -1))
+      (maphash (lambda (session-dir session)
+                 (when (antigravity-cli-ide-mcp--path-in-directory-p path session-dir)
+                   (let ((len (length (directory-file-name (expand-file-name session-dir)))))
+                     (when (> len best-len)
+                       (setq best-len len
+                             best-session session)))))
+               antigravity-cli-ide-mcp--sessions)
+      best-session)))
+
 (defun antigravity-cli-ide-mcp--get-current-session ()
-  "Get the MCP session for the current buffer's project."
-  (when-let* ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
-    (antigravity-cli-ide-mcp--get-session-for-project project-dir)))
+  "Get the MCP session for the current buffer or project."
+  (let ((current-path (or (buffer-file-name) default-directory)))
+    (or (when current-path
+          (antigravity-cli-ide-mcp--find-best-matching-session current-path))
+        (when-let* ((project-dir (antigravity-cli-ide-mcp--get-buffer-project)))
+          (antigravity-cli-ide-mcp--get-session-for-project project-dir)))))
 
 (defun antigravity-cli-ide-mcp--find-session-by-proc (proc)
   "Find session with client process PROC."

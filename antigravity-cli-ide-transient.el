@@ -34,10 +34,12 @@
 (require 'antigravity-cli-ide-debug)
 
 ;; Declare functions from other files to avoid circular dependencies
-(declare-function antigravity-cli-ide "antigravity-cli-ide" ())
-(declare-function antigravity-cli-ide-resume "antigravity-cli-ide" ())
-(declare-function antigravity-cli-ide-continue "antigravity-cli-ide" ())
-(declare-function antigravity-cli-ide-stop "antigravity-cli-ide" ())
+(declare-function antigravity-cli-ide "antigravity-cli-ide" (&optional arg))
+(declare-function antigravity-cli-ide-resume "antigravity-cli-ide" (&optional arg))
+(declare-function antigravity-cli-ide-continue "antigravity-cli-ide" (&optional arg))
+(declare-function antigravity-cli-ide-stop "antigravity-cli-ide" (&optional dir-override))
+(declare-function antigravity-cli-ide-start-in-current-directory "antigravity-cli-ide" ())
+(declare-function antigravity-cli-ide-start-in-directory "antigravity-cli-ide" (directory))
 (declare-function antigravity-cli-ide-list-sessions "antigravity-cli-ide" ())
 (declare-function antigravity-cli-ide-switch-to-buffer "antigravity-cli-ide" ())
 (declare-function antigravity-cli-ide-insert-at-mentioned "antigravity-cli-ide" ())
@@ -72,6 +74,7 @@
 (defvar antigravity-cli-ide-cli-extra-flags)
 (defvar antigravity-cli-ide-auto-prefix-prompt)
 (defvar antigravity-cli-ide-auto-fill-context)
+(defvar antigravity-cli-ide-working-directory-scope)
 
 ;;; Helper Functions
 
@@ -86,14 +89,15 @@
                   'face 'transient-inactive-value)
     "Start new Antigravity session"))
 
-(defun antigravity-cli-ide--start-if-no-session ()
-  "Start Antigravity CLI only if no session is active for current buffer."
-  (interactive)
+(defun antigravity-cli-ide--start-if-no-session (&optional arg)
+  "Start Antigravity CLI only if no session is active for current buffer.
+With prefix ARG, prompt for working directory."
+  (interactive "P")
   (if (antigravity-cli-ide--has-active-session-p)
       (let ((working-dir (antigravity-cli-ide--get-working-directory)))
         (antigravity-cli-ide-log "Antigravity session already running in %s"
                              (abbreviate-file-name working-dir)))
-    (antigravity-cli-ide)))
+    (antigravity-cli-ide arg)))
 
 (defun antigravity-cli-ide--continue-description ()
   "Dynamic description for continue command based on session status."
@@ -300,6 +304,16 @@
   (antigravity-cli-ide-log "Auto fill context on focus %s"
                        (if antigravity-cli-ide-auto-fill-context "enabled" "disabled")))
 
+(transient-define-suffix antigravity-cli-ide--toggle-working-directory-scope ()
+  "Toggle between project-root and current-directory working directory scope."
+  (interactive)
+  (setq antigravity-cli-ide-working-directory-scope
+        (if (eq antigravity-cli-ide-working-directory-scope 'current-directory)
+            'project-root
+          'current-directory))
+  (antigravity-cli-ide-log "Working directory scope set to %s"
+                           antigravity-cli-ide-working-directory-scope))
+
 (defun antigravity-cli-ide--save-config ()
   "Save current configuration to custom file."
   (interactive)
@@ -316,6 +330,7 @@
   (customize-save-variable 'antigravity-cli-ide-cli-extra-flags antigravity-cli-ide-cli-extra-flags)
   (customize-save-variable 'antigravity-cli-ide-auto-prefix-prompt antigravity-cli-ide-auto-prefix-prompt)
   (customize-save-variable 'antigravity-cli-ide-auto-fill-context antigravity-cli-ide-auto-fill-context)
+  (customize-save-variable 'antigravity-cli-ide-working-directory-scope antigravity-cli-ide-working-directory-scope)
   (antigravity-cli-ide-log "Configuration saved to custom file"))
 
 ;;; Transient Menus
@@ -327,6 +342,8 @@
   ["Antigravity CLI IDE"
    ["Session Management"
     ("s" antigravity-cli-ide--start-if-no-session :description antigravity-cli-ide--start-description)
+    ("f" "Start in current file dir" antigravity-cli-ide-start-in-current-directory)
+    ("d" "Start in directory..." antigravity-cli-ide-start-in-directory)
     ("c" antigravity-cli-ide--continue-if-no-session :description antigravity-cli-ide--continue-description)
     ("r" antigravity-cli-ide--resume-if-no-session :description antigravity-cli-ide--resume-description)
     ("q" "Stop current session" antigravity-cli-ide-stop)
@@ -342,7 +359,7 @@
     ("n" "Insert newline" antigravity-cli-ide-insert-newline)]
    ["Submenus"
     ("C" "Configuration" antigravity-cli-ide-config-menu)
-    ("d" "Debugging" antigravity-cli-ide-debug-menu)]])
+    ("D" "Debugging" antigravity-cli-ide-debug-menu)]])
 
 (transient-define-prefix antigravity-cli-ide-config-menu ()
   "Antigravity configuration menu."
@@ -375,7 +392,11 @@
                                      (if antigravity-cli-ide-auto-prefix-prompt "ON" "OFF"))))
     ("A" "Toggle auto-fill context on focus" antigravity-cli-ide--toggle-auto-fill-context
      :description (lambda () (format "Auto-fill on focus (%s)"
-                                     (if antigravity-cli-ide-auto-fill-context "ON" "OFF"))))]
+                                     (if antigravity-cli-ide-auto-fill-context "ON" "OFF"))))
+    ("d" "Toggle directory scope" antigravity-cli-ide--toggle-working-directory-scope
+     :description (lambda () (format "Directory scope (%s)"
+                                     (if (eq antigravity-cli-ide-working-directory-scope 'current-directory)
+                                         "Current Directory" "Project Root"))))]
    ["CLI Settings"
     ("p" "Set CLI path" antigravity-cli-ide--set-cli-path)
     ("x" "Set extra CLI flags" antigravity-cli-ide--set-cli-extra-flags)]]

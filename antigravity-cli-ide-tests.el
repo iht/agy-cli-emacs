@@ -57,7 +57,10 @@
   (should (eq antigravity-cli-ide-window-side 'right))
   
   (should (boundp 'antigravity-cli-ide-use-ide-diff))
-  (should (eq antigravity-cli-ide-use-ide-diff t)))
+  (should (eq antigravity-cli-ide-use-ide-diff t))
+
+  (should (boundp 'antigravity-cli-ide-working-directory-scope))
+  (should (eq antigravity-cli-ide-working-directory-scope 'project-root)))
 
 (ert-deftest test-antigravity-cli-ide-command-builder ()
   "Verify that the command-line argument builder outputs correct strings."
@@ -144,7 +147,9 @@
   (should (fboundp 'transient--set-layout))
   (should (fboundp 'antigravity-cli-ide-menu))
   (should (fboundp 'antigravity-cli-ide-config-menu))
-  (should (fboundp 'antigravity-cli-ide-debug-menu)))
+  (should (fboundp 'antigravity-cli-ide-debug-menu))
+  (should (fboundp 'antigravity-cli-ide-start-in-directory))
+  (should (fboundp 'antigravity-cli-ide-start-in-current-directory)))
 
 (ert-deftest test-antigravity-cli-ide-target-buffer-and-format ()
   "Verify target buffer resolution and context formatting with and without region."
@@ -240,6 +245,58 @@
         (kill-buffer buf))
       (when (file-exists-p temp-file)
         (delete-file temp-file)))))
+
+(ert-deftest test-antigravity-cli-ide-working-directory-scope ()
+  "Verify working directory resolution respects `antigravity-cli-ide-working-directory-scope'."
+  (should (boundp 'antigravity-cli-ide-working-directory-scope))
+  (should (eq antigravity-cli-ide-working-directory-scope 'project-root))
+  
+  (let* ((proj-dir (file-name-as-directory (expand-file-name "/tmp/mock-project")))
+         (sub-dir (file-name-as-directory (expand-file-name "activity-01" proj-dir)))
+         (temp-file (expand-file-name "main.py" sub-dir))
+         (buf (generate-new-buffer "mock-main.py")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq buffer-file-name temp-file
+                default-directory sub-dir)
+          (cl-letf (((symbol-function 'project-current) (lambda (&rest _) (list 'vc 'Git proj-dir)))
+                    ((symbol-function 'project-root) (lambda (_) proj-dir)))
+            ;; Under project-root scope, should return project root
+            (let ((antigravity-cli-ide-working-directory-scope 'project-root))
+              (should (string= (directory-file-name (antigravity-cli-ide--get-working-directory))
+                               (directory-file-name proj-dir))))
+            ;; Under current-directory scope, should return sub-dir
+            (let ((antigravity-cli-ide-working-directory-scope 'current-directory))
+              (should (string= (directory-file-name (antigravity-cli-ide--get-working-directory))
+                               (directory-file-name sub-dir))))
+            ;; Explicit directory override should always take precedence
+            (should (string= (directory-file-name (antigravity-cli-ide--get-working-directory nil "/tmp/custom-override"))
+                             "/tmp/custom-override"))))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(ert-deftest test-antigravity-cli-ide-deepest-session-matching ()
+  "Verify nested monorepo sessions resolve to the deepest matching ancestor directory."
+  (let ((saved-sessions antigravity-cli-ide-mcp--sessions)
+        (root-sess (make-antigravity-cli-ide-mcp-session :project-dir "/tmp/monorepo"))
+        (sub-sess (make-antigravity-cli-ide-mcp-session :project-dir "/tmp/monorepo/activity-01")))
+    (unwind-protect
+        (progn
+          (setq antigravity-cli-ide-mcp--sessions (make-hash-table :test 'equal))
+          (puthash "/tmp/monorepo" root-sess antigravity-cli-ide-mcp--sessions)
+          (puthash "/tmp/monorepo/activity-01" sub-sess antigravity-cli-ide-mcp--sessions)
+          
+          ;; File in activity-01 should match the more specific sub-sess
+          (should (eq (antigravity-cli-ide-mcp--find-best-matching-session "/tmp/monorepo/activity-01/hw.py")
+                      sub-sess))
+          (should (eq (antigravity-cli-ide-mcp--find-best-matching-session "/tmp/monorepo/activity-01/subdir/hw.py")
+                      sub-sess))
+          ;; File in activity-02 should fall back to root-sess
+          (should (eq (antigravity-cli-ide-mcp--find-best-matching-session "/tmp/monorepo/activity-02/hw.py")
+                      root-sess))
+          ;; File outside monorepo should return nil
+          (should (null (antigravity-cli-ide-mcp--find-best-matching-session "/tmp/other-project/hw.py"))))
+      (setq antigravity-cli-ide-mcp--sessions saved-sessions))))
 
 (provide 'antigravity-cli-ide-tests)
 ;;; antigravity-cli-ide-tests.el ends here

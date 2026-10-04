@@ -89,6 +89,14 @@
   :type 'string
   :group 'antigravity-cli-ide)
 
+(defcustom antigravity-cli-ide-working-directory-scope 'project-root
+  "Strategy for determining working directory of CLI sessions.
+When `project-root', use the root directory of the current project.
+When `current-directory', use the directory of current file or buffer."
+  :type '(choice (const :tag "Project Root (Git repository)" project-root)
+                 (const :tag "Current File/Buffer Directory" current-directory))
+  :group 'antigravity-cli-ide)
+
 (defcustom antigravity-cli-ide-buffer-name-function #'antigravity-cli-ide--default-buffer-name
   "Function to generate buffer names for Antigravity sessions."
   :type 'function
@@ -434,7 +442,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
   (when-let* ((target-buf (antigravity-cli-ide--get-target-buffer)))
     (with-current-buffer target-buf
       (let* ((file-path (buffer-file-name target-buf))
-             (proj-dir (antigravity-cli-ide--get-working-directory))
+             (proj-dir (antigravity-cli-ide--get-session-directory))
              (rel-path (if (and file-path proj-dir (file-in-directory-p file-path proj-dir))
                            (file-relative-name file-path proj-dir)
                          file-path))
@@ -460,7 +468,7 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
   (let ((info (if target-buffer
                   (with-current-buffer target-buffer
                     (let* ((file-path (buffer-file-name target-buffer))
-                           (proj-dir (antigravity-cli-ide--get-working-directory))
+                           (proj-dir (antigravity-cli-ide--get-session-directory))
                            (rel-path (if (and file-path proj-dir (file-in-directory-p file-path proj-dir))
                                          (file-relative-name file-path proj-dir)
                                        file-path))
@@ -506,20 +514,38 @@ Returns a plist with :buffer, :buffer-name, :file-path, :relative-path,
   "Return default buffer name for DIRECTORY."
   (format "*antigravity-cli[%s]*" (file-name-nondirectory (directory-file-name directory))))
 
-(defun antigravity-cli-ide--get-working-directory ()
-  "Get the working directory for current project or default directory."
-  (if-let* ((project (project-current)))
-      (expand-file-name (project-root project))
-    (expand-file-name default-directory)))
+(defun antigravity-cli-ide--get-working-directory (&optional scope dir-override)
+  "Get the working directory using SCOPE and optional DIR-OVERRIDE.
+SCOPE defaults to `antigravity-cli-ide-working-directory-scope'."
+  (if dir-override
+      (file-name-as-directory (expand-file-name dir-override))
+    (let ((eff-scope (or scope antigravity-cli-ide-working-directory-scope)))
+      (cond
+       ((eq eff-scope 'current-directory)
+        (file-name-as-directory
+         (expand-file-name
+          (if (and (buffer-file-name) (not (antigravity-cli-ide--session-buffer-p (current-buffer))))
+              (file-name-directory (buffer-file-name))
+            default-directory))))
+       (t
+        (if-let* ((project (project-current)))
+            (file-name-as-directory (expand-file-name (project-root project)))
+          (file-name-as-directory (expand-file-name default-directory))))))))
+
+(defun antigravity-cli-ide--get-session-directory ()
+  "Get the directory for the current session or working directory."
+  (if-let* ((session (antigravity-cli-ide-mcp--get-current-session)))
+      (antigravity-cli-ide-mcp-session-project-dir session)
+    (antigravity-cli-ide--get-working-directory)))
 
 (defun antigravity-cli-ide--get-buffer-name (&optional directory)
   "Get the session buffer name for DIRECTORY."
   (funcall antigravity-cli-ide-buffer-name-function
-           (or directory (antigravity-cli-ide--get-working-directory))))
+           (or directory (antigravity-cli-ide--get-session-directory))))
 
 (defun antigravity-cli-ide--get-process (&optional directory)
   "Get the live process for DIRECTORY."
-  (gethash (or directory (antigravity-cli-ide--get-working-directory))
+  (gethash (or directory (antigravity-cli-ide--get-session-directory))
            antigravity-cli-ide--processes))
 
 (defun antigravity-cli-ide--set-process (process &optional directory)
@@ -738,15 +764,15 @@ CONTINUE and RESUME indicate whether to resume previous sessions."
            ((not (pos-visible-in-window-p tp win))
             (with-selected-window win (goto-char tp) (recenter)))))))))
 
-(defun antigravity-cli-ide--start-session (&optional continue resume)
-  "Start or focus Antigravity CLI session with CONTINUE or RESUME."
+(defun antigravity-cli-ide--start-session (&optional continue resume dir-override)
+  "Start or focus Antigravity CLI session with CONTINUE, RESUME, or DIR-OVERRIDE."
   (unless (antigravity-cli-ide--ensure-cli)
     (user-error "Antigravity CLI ('agy' executable) not found in PATH"))
   
   (antigravity-cli-ide--cleanup-dead-processes)
   
-  (let* ((working-dir (antigravity-cli-ide--get-working-directory))
-         (buffer-name (antigravity-cli-ide--get-buffer-name))
+  (let* ((working-dir (antigravity-cli-ide--get-working-directory nil dir-override))
+         (buffer-name (antigravity-cli-ide--get-buffer-name working-dir))
          (existing-buffer (get-buffer buffer-name))
          (existing-process (antigravity-cli-ide--get-process working-dir)))
     
@@ -805,22 +831,50 @@ CONTINUE and RESUME indicate whether to resume previous sessions."
            (signal (car err) (cdr err))))))))
 
 ;;;###autoload
-(defun antigravity-cli-ide ()
-  "Run Antigravity CLI in a terminal for the current project."
-  (interactive)
-  (antigravity-cli-ide--start-session))
+(defun antigravity-cli-ide (&optional arg)
+  "Run Antigravity CLI in a terminal for the current project.
+With prefix ARG (\\[universal-argument]), prompt for the working directory."
+  (interactive "P")
+  (let ((dir (when arg
+               (read-directory-name "Start Antigravity in directory: "
+                                    default-directory default-directory t))))
+    (antigravity-cli-ide--start-session nil nil dir)))
 
 ;;;###autoload
-(defun antigravity-cli-ide-resume ()
-  "Resume Antigravity CLI session."
-  (interactive)
-  (antigravity-cli-ide--start-session nil t))
+(defun antigravity-cli-ide-resume (&optional arg)
+  "Resume Antigravity CLI session.
+With prefix ARG (\\[universal-argument]), prompt for the working directory."
+  (interactive "P")
+  (let ((dir (when arg
+               (read-directory-name "Resume Antigravity in directory: "
+                                    default-directory default-directory t))))
+    (antigravity-cli-ide--start-session nil t dir)))
 
 ;;;###autoload
-(defun antigravity-cli-ide-continue ()
-  "Continue the most recent Antigravity CLI session."
+(defun antigravity-cli-ide-continue (&optional arg)
+  "Continue the most recent Antigravity CLI session.
+With prefix ARG (\\[universal-argument]), prompt for the working directory."
+  (interactive "P")
+  (let ((dir (when arg
+               (read-directory-name "Continue Antigravity in directory: "
+                                    default-directory default-directory t))))
+    (antigravity-cli-ide--start-session t nil dir)))
+
+;;;###autoload
+(defun antigravity-cli-ide-start-in-current-directory ()
+  "Start Antigravity CLI session in the current buffer's directory."
   (interactive)
-  (antigravity-cli-ide--start-session t))
+  (let ((dir (if (and (buffer-file-name) (not (antigravity-cli-ide--session-buffer-p (current-buffer))))
+                 (file-name-directory (buffer-file-name))
+               default-directory)))
+    (antigravity-cli-ide--start-session nil nil dir)))
+
+;;;###autoload
+(defun antigravity-cli-ide-start-in-directory (directory)
+  "Start Antigravity CLI session in DIRECTORY."
+  (interactive (list (read-directory-name "Start Antigravity in directory: "
+                                         default-directory default-directory t)))
+  (antigravity-cli-ide--start-session nil nil directory))
 
 ;;;###autoload
 (defun antigravity-cli-ide-check-status ()
@@ -832,11 +886,13 @@ CONTINUE and RESUME indicate whether to resume previous sessions."
     (antigravity-cli-ide-log "Antigravity CLI is not found or not operational")))
 
 ;;;###autoload
-(defun antigravity-cli-ide-stop ()
-  "Stop the Antigravity CLI session."
+(defun antigravity-cli-ide-stop (&optional dir-override)
+  "Stop the Antigravity CLI session.
+When DIR-OVERRIDE is non-nil, stop the session for that directory."
   (interactive)
-  (let* ((working-dir (antigravity-cli-ide--get-working-directory))
-         (buffer-name (antigravity-cli-ide--get-buffer-name)))
+  (let* ((working-dir (or dir-override
+                          (antigravity-cli-ide--get-session-directory)))
+         (buffer-name (antigravity-cli-ide--get-buffer-name working-dir)))
     (if-let* ((buffer (get-buffer buffer-name)))
         (progn
           (kill-buffer buffer)
@@ -882,7 +938,7 @@ and switches focus to the Antigravity window."
   (let* ((ref (antigravity-cli-ide--format-context-reference)))
     (unless ref
       (user-error "No file open in the current or companion buffer"))
-    (let* ((working-dir (antigravity-cli-ide--get-working-directory))
+    (let* ((working-dir (antigravity-cli-ide--get-session-directory))
            (buffer-name (antigravity-cli-ide--get-buffer-name working-dir))
            (term-buffer (get-buffer buffer-name)))
       (unless (and term-buffer (buffer-live-p term-buffer))
@@ -942,8 +998,8 @@ pre-fills the prompt input with the active companion file context."
 (defun antigravity-cli-ide-toggle ()
   "Toggle Antigravity window visibility."
   (interactive)
-  (let* ((working-dir (antigravity-cli-ide--get-working-directory))
-         (buffer-name (antigravity-cli-ide--get-buffer-name))
+  (let* ((working-dir (antigravity-cli-ide--get-session-directory))
+         (buffer-name (antigravity-cli-ide--get-buffer-name working-dir))
          (buffer (get-buffer buffer-name)))
     (if buffer
         (antigravity-cli-ide--toggle-existing-window buffer working-dir)
