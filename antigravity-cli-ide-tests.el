@@ -60,12 +60,16 @@
   (should (eq antigravity-cli-ide-use-ide-diff t))
 
   (should (boundp 'antigravity-cli-ide-working-directory-scope))
-  (should (eq antigravity-cli-ide-working-directory-scope 'project-root)))
+  (should (eq antigravity-cli-ide-working-directory-scope 'project-root))
+
+  (should (boundp 'antigravity-cli-ide-remote-control))
+  (should (eq antigravity-cli-ide-remote-control nil)))
 
 (ert-deftest test-antigravity-cli-ide-command-builder ()
   "Verify that the command-line argument builder outputs correct strings."
   (let ((antigravity-cli-ide-cli-path "agy")
-        (antigravity-cli-ide-cli-extra-flags ""))
+        (antigravity-cli-ide-cli-extra-flags "")
+        (antigravity-cli-ide-remote-control nil))
     ;; Basic command
     (should (string= (antigravity-cli-ide--build-antigravity-command) "agy"))
     
@@ -78,7 +82,19 @@
     ;; With extra flags
     (let ((antigravity-cli-ide-cli-extra-flags "--sandbox"))
       (should (string= (antigravity-cli-ide--build-antigravity-command) "agy --sandbox"))
-      (should (string= (antigravity-cli-ide--build-antigravity-command t) "agy -c --sandbox")))))
+      (should (string= (antigravity-cli-ide--build-antigravity-command t) "agy -c --sandbox")))
+
+    ;; With remote-control defcustom
+    (let ((antigravity-cli-ide-remote-control t))
+      (should (string= (antigravity-cli-ide--build-antigravity-command) "agy --remote-control"))
+      (should (string= (antigravity-cli-ide--build-antigravity-command t) "agy -c --remote-control"))
+      (let ((antigravity-cli-ide-cli-extra-flags "--sandbox"))
+        (should (string= (antigravity-cli-ide--build-antigravity-command t) "agy -c --remote-control --sandbox"))))
+
+    ;; With remote-control parameter override
+    (let ((antigravity-cli-ide-remote-control nil))
+      (should (string= (antigravity-cli-ide--build-antigravity-command nil nil nil t) "agy --remote-control"))
+      (should (string= (antigravity-cli-ide--build-antigravity-command t nil nil t) "agy -c --remote-control")))))
 
 (ert-deftest test-antigravity-cli-ide-buffer-naming ()
   "Verify that buffers are dynamically named based on working directories."
@@ -148,8 +164,11 @@
   (should (fboundp 'antigravity-cli-ide-menu))
   (should (fboundp 'antigravity-cli-ide-config-menu))
   (should (fboundp 'antigravity-cli-ide-debug-menu))
+  (should (fboundp 'antigravity-cli-ide-remote-control-menu))
   (should (fboundp 'antigravity-cli-ide-start-in-directory))
-  (should (fboundp 'antigravity-cli-ide-start-in-current-directory)))
+  (should (fboundp 'antigravity-cli-ide-start-in-current-directory))
+  (should (fboundp 'antigravity-cli-ide-start-with-remote-control))
+  (should (fboundp 'antigravity-cli-ide-remote-control-toggle)))
 
 (ert-deftest test-antigravity-cli-ide-target-buffer-and-format ()
   "Verify target buffer resolution and context formatting with and without region."
@@ -297,6 +316,57 @@
           ;; File outside monorepo should return nil
           (should (null (antigravity-cli-ide-mcp--find-best-matching-session "/tmp/other-project/hw.py"))))
       (setq antigravity-cli-ide-mcp--sessions saved-sessions))))
+
+(ert-deftest test-antigravity-cli-ide-remote-control-toggle ()
+  "Verify antigravity-cli-ide-remote-control-toggle sends expected slash commands."
+  (let* ((working-dir (antigravity-cli-ide--get-working-directory))
+         (buffer-name (antigravity-cli-ide--get-buffer-name working-dir))
+         (buf (get-buffer-create buffer-name))
+         (sent-strings '()))
+    (unwind-protect
+        (cl-letf (((symbol-function 'antigravity-cli-ide--terminal-send-string)
+                   (lambda (s) (push s sent-strings)))
+                  ((symbol-function 'antigravity-cli-ide--terminal-send-return)
+                   #'ignore))
+          ;; Default toggle: /remote-control
+          (antigravity-cli-ide-remote-control-toggle nil)
+          (should (member "/remote-control" sent-strings))
+
+          ;; Positive prefix: /remote-control on
+          (setq sent-strings nil)
+          (antigravity-cli-ide-remote-control-toggle 1)
+          (should (member "/remote-control on" sent-strings))
+
+          ;; Negative prefix: /remote-control off
+          (setq sent-strings nil)
+          (antigravity-cli-ide-remote-control-toggle -1)
+          (should (member "/remote-control off" sent-strings)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
+(ert-deftest test-antigravity-cli-ide-remote-control-transient-toggle ()
+  "Verify transient toggle suffix flips the customization variable."
+  (let ((antigravity-cli-ide-remote-control nil))
+    (antigravity-cli-ide--toggle-remote-control)
+    (should (eq antigravity-cli-ide-remote-control t))
+    (antigravity-cli-ide--toggle-remote-control)
+    (should (eq antigravity-cli-ide-remote-control nil))))
+
+(ert-deftest test-antigravity-cli-ide-remote-control-status ()
+  "Verify antigravity-cli-ide-remote-control-status populates output buffer."
+  (cl-letf (((symbol-function 'antigravity-cli-ide--ensure-cli) (lambda () t))
+            ((symbol-function 'call-process)
+             (lambda (_program _infile _destination _display &rest args)
+               (when (equal args '("remote-control" "status"))
+                 (insert "Daemon status: active\nInstance name: test-instance\n")
+                 0))))
+    (antigravity-cli-ide-remote-control-status)
+    (let ((buf (get-buffer "*Antigravity Remote Control Status*")))
+      (should (buffer-live-p buf))
+      (with-current-buffer buf
+        (should (string-search "Daemon status: active" (buffer-string)))
+        (should (string-search "test-instance" (buffer-string))))
+      (kill-buffer buf))))
 
 (provide 'antigravity-cli-ide-tests)
 ;;; antigravity-cli-ide-tests.el ends here

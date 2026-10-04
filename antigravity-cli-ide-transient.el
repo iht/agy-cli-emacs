@@ -49,6 +49,11 @@
 (declare-function antigravity-cli-ide-toggle "antigravity-cli-ide" ())
 (declare-function antigravity-cli-ide-toggle-recent "antigravity-cli-ide" ())
 (declare-function antigravity-cli-ide-check-status "antigravity-cli-ide" ())
+(declare-function antigravity-cli-ide-start-with-remote-control "antigravity-cli-ide" (&optional arg))
+(declare-function antigravity-cli-ide-remote-control-toggle "antigravity-cli-ide" (&optional arg))
+(declare-function antigravity-cli-ide-remote-control-status "antigravity-cli-ide" ())
+(declare-function antigravity-cli-ide-remote-control-daemon-start "antigravity-cli-ide" (&optional name))
+(declare-function antigravity-cli-ide-remote-control-daemon-stop "antigravity-cli-ide" ())
 (declare-function antigravity-cli-ide--ensure-cli "antigravity-cli-ide" ())
 (declare-function antigravity-cli-ide-mcp--active-sessions "antigravity-cli-ide-mcp" ())
 (declare-function antigravity-cli-ide-mcp-session-project-dir "antigravity-cli-ide-mcp" (session))
@@ -60,6 +65,7 @@
 
 ;; Declare variables
 (defvar antigravity-cli-ide-cli-path)
+(defvar antigravity-cli-ide-remote-control)
 (defvar antigravity-cli-ide-debug)
 (defvar antigravity-cli-ide-window-side)
 (defvar antigravity-cli-ide-window-width)
@@ -314,6 +320,13 @@ With prefix ARG, prompt for working directory."
   (antigravity-cli-ide-log "Working directory scope set to %s"
                            antigravity-cli-ide-working-directory-scope))
 
+(transient-define-suffix antigravity-cli-ide--toggle-remote-control ()
+  "Toggle remote control default setting."
+  (interactive)
+  (setq antigravity-cli-ide-remote-control (not antigravity-cli-ide-remote-control))
+  (antigravity-cli-ide-log "Remote control on session startup %s"
+                           (if antigravity-cli-ide-remote-control "enabled" "disabled")))
+
 (defun antigravity-cli-ide--save-config ()
   "Save current configuration to custom file."
   (interactive)
@@ -328,6 +341,7 @@ With prefix ARG, prompt for working directory."
   (customize-save-variable 'antigravity-cli-ide-use-side-window antigravity-cli-ide-use-side-window)
   (customize-save-variable 'antigravity-cli-ide-cli-path antigravity-cli-ide-cli-path)
   (customize-save-variable 'antigravity-cli-ide-cli-extra-flags antigravity-cli-ide-cli-extra-flags)
+  (customize-save-variable 'antigravity-cli-ide-remote-control antigravity-cli-ide-remote-control)
   (customize-save-variable 'antigravity-cli-ide-auto-prefix-prompt antigravity-cli-ide-auto-prefix-prompt)
   (customize-save-variable 'antigravity-cli-ide-auto-fill-context antigravity-cli-ide-auto-fill-context)
   (customize-save-variable 'antigravity-cli-ide-working-directory-scope antigravity-cli-ide-working-directory-scope)
@@ -355,10 +369,12 @@ With prefix ARG, prompt for working directory."
    ["Interaction"
     ("i" antigravity-cli-ide-insert-at-mentioned :description antigravity-cli-ide--insert-description)
     ("p" "Send prompt from minibuffer" antigravity-cli-ide-send-prompt)
+    ("t" "Toggle remote control" antigravity-cli-ide-remote-control-toggle)
     ("e" "Send escape key" antigravity-cli-ide-send-escape)
     ("n" "Insert newline" antigravity-cli-ide-insert-newline)]
    ["Submenus"
     ("C" "Configuration" antigravity-cli-ide-config-menu)
+    ("R" "Remote Control" antigravity-cli-ide-remote-control-menu)
     ("D" "Debugging" antigravity-cli-ide-debug-menu)]])
 
 (transient-define-prefix antigravity-cli-ide-config-menu ()
@@ -399,9 +415,27 @@ With prefix ARG, prompt for working directory."
                                          "Current Directory" "Project Root"))))]
    ["CLI Settings"
     ("p" "Set CLI path" antigravity-cli-ide--set-cli-path)
-    ("x" "Set extra CLI flags" antigravity-cli-ide--set-cli-extra-flags)]]
+    ("x" "Set extra CLI flags" antigravity-cli-ide--set-cli-extra-flags)
+    ("r" "Toggle remote control" antigravity-cli-ide--toggle-remote-control
+     :description (lambda () (format "Remote control on start (%s)"
+                                     (if antigravity-cli-ide-remote-control "ON" "OFF"))))]]
   ["Save"
    ("S" "Save configuration" antigravity-cli-ide--save-config)])
+
+(transient-define-prefix antigravity-cli-ide-remote-control-menu ()
+  "Antigravity Remote Control management menu."
+  ["Antigravity Remote Control"
+   ["Session Actions"
+    ("s" "Start with remote control" antigravity-cli-ide-start-with-remote-control)
+    ("t" "Toggle in active session" antigravity-cli-ide-remote-control-toggle)]
+   ["Daemon Management"
+    ("S" "Check daemon status" antigravity-cli-ide-remote-control-status)
+    ("u" "Start daemon" antigravity-cli-ide-remote-control-daemon-start)
+    ("k" "Stop daemon" antigravity-cli-ide-remote-control-daemon-stop)]
+   ["Configuration"
+    ("r" "Toggle default startup flag" antigravity-cli-ide--toggle-remote-control
+     :description (lambda () (format "Default remote control (%s)"
+                                     (if antigravity-cli-ide-remote-control "ON" "OFF"))))]])
 
 (transient-define-prefix antigravity-cli-ide-debug-menu ()
   "Antigravity debug menu."

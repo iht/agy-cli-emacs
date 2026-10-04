@@ -113,8 +113,25 @@ Run `M-x antigravity-cli-ide-menu` or press your keybinding (`C-c g`) to open th
 - **w**: Toggle side window visibility
 - **i**: Insert active file/region context (`@file` or `@file:start-end`) into the Antigravity prompt and focus terminal
 - **p**: Send prompt from minibuffer (automatically pre-filled with the active companion file context)
+- **t**: Toggle Remote Control in active session (`/remote-control`)
+- **R**: Open dedicated Remote Control submenu (daemon management & session options)
 - **C**: Access comprehensive window, CLI, and context settings
 - **d**: Open the diagnostics, sessions, and debug logging panel
+
+### 🌐 Remote Control Integration
+
+Antigravity CLI supports **Remote Control**, allowing you to drive and monitor your CLI agent sessions from any web browser (on phone, tablet, or another workstation) via [antigravity.google.com](https://antigravity.google.com/) while retaining full local Emacs MCP tool bridge execution:
+
+* **Session Startup**:
+  - Start a session with Remote Control on-demand: `M-x antigravity-cli-ide-start-with-remote-control` or `C-c g R s`.
+  - Enable Remote Control by default for all sessions: `(setq antigravity-cli-ide-remote-control t)` or toggle in the configuration menu (`C-c g C r`).
+* **In-Session Control**:
+  - Press `t` in the main transient menu (`C-c g t`) or run `M-x antigravity-cli-ide-remote-control-toggle` to send `/remote-control` to the active session.
+  - Pass a positive prefix argument (`C-u`) for `/remote-control on`, or negative argument (`C-u -`) for `/remote-control off`.
+* **Daemon Management**:
+  - Open the Remote Control submenu via `C-c g R` (`M-x antigravity-cli-ide-remote-control-menu`).
+  - Inspect daemon status via `S` (`M-x antigravity-cli-ide-remote-control-status`).
+  - Start or stop the background daemon via `u` / `k` (`M-x antigravity-cli-ide-remote-control-daemon-start` / `stop`).
 
 ### Active Buffer File Context
 

@@ -112,6 +112,12 @@ When `current-directory', use the directory of current file or buffer."
   :type 'string
   :group 'antigravity-cli-ide)
 
+(defcustom antigravity-cli-ide-remote-control nil
+  "Whether to enable Remote Control when launching Antigravity CLI sessions.
+When non-nil, appends `--remote-control' to the CLI invocation."
+  :type 'boolean
+  :group 'antigravity-cli-ide)
+
 (defcustom antigravity-cli-ide-window-side 'right
   "Side of the frame where the Antigravity window should appear."
   :type '(choice (const left) (const right) (const top) (const bottom))
@@ -699,12 +705,15 @@ and `PATH'."
           (when (fboundp 'tab-bar--current-tab)
             (setf (antigravity-cli-ide-mcp-session-original-tab session) (tab-bar--current-tab))))))))
 
-(defun antigravity-cli-ide--build-antigravity-command (&optional continue resume _session-id)
-  "Build CLI command string using CONTINUE, RESUME, or _SESSION-ID."
+(defun antigravity-cli-ide--build-antigravity-command (&optional continue resume _session-id remote-control)
+  "Build CLI command string.
+Options include CONTINUE, RESUME, _SESSION-ID, and REMOTE-CONTROL."
   (let ((cmd antigravity-cli-ide-cli-path))
     (cond
      (continue (setq cmd (concat cmd " -c")))
      (resume (setq cmd (concat cmd " -c"))))
+    (when (or remote-control antigravity-cli-ide-remote-control)
+      (setq cmd (concat cmd " --remote-control")))
     (when (and antigravity-cli-ide-cli-extra-flags
                (not (string-empty-p antigravity-cli-ide-cli-extra-flags)))
       (setq cmd (concat cmd " " antigravity-cli-ide-cli-extra-flags)))
@@ -715,11 +724,12 @@ and `PATH'."
   (let ((parts (split-string-shell-command command-string)))
     (cons (car parts) (cdr parts))))
 
-(defun antigravity-cli-ide--create-terminal-session (buffer-name working-dir _port continue resume session-id)
+(defun antigravity-cli-ide--create-terminal-session (buffer-name working-dir _port continue resume session-id &optional remote-control)
   "Create terminal session for BUFFER-NAME in WORKING-DIR with SESSION-ID.
-CONTINUE and RESUME indicate whether to resume previous sessions."
+CONTINUE and RESUME indicate whether to resume previous sessions.
+When REMOTE-CONTROL is non-nil, start session with Remote Control enabled."
   (antigravity-cli-ide--terminal-ensure-backend)
-  (let* ((cmd-str (antigravity-cli-ide--build-antigravity-command continue resume session-id))
+  (let* ((cmd-str (antigravity-cli-ide--build-antigravity-command continue resume session-id remote-control))
          (default-directory working-dir)
          (env-vars (list "TERM_PROGRAM=emacs" "FORCE_CODE_TERMINAL=true")))
     
@@ -764,8 +774,11 @@ CONTINUE and RESUME indicate whether to resume previous sessions."
            ((not (pos-visible-in-window-p tp win))
             (with-selected-window win (goto-char tp) (recenter)))))))))
 
-(defun antigravity-cli-ide--start-session (&optional continue resume dir-override)
-  "Start or focus Antigravity CLI session with CONTINUE, RESUME, or DIR-OVERRIDE."
+(defun antigravity-cli-ide--start-session (&optional continue resume dir-override remote-control)
+  "Start or focus Antigravity CLI session.
+CONTINUE and RESUME resume previous conversations.
+DIR-OVERRIDE specifies the working directory.
+When REMOTE-CONTROL is non-nil, enable Remote Control for this session."
   (unless (antigravity-cli-ide--ensure-cli)
     (user-error "Antigravity CLI ('agy' executable) not found in PATH"))
   
@@ -796,7 +809,7 @@ CONTINUE and RESUME indicate whether to resume previous sessions."
               
               ;; Create terminal process
               (let* ((buf-and-proc (antigravity-cli-ide--create-terminal-session
-                                    buffer-name working-dir port continue resume session-id))
+                                    buffer-name working-dir port continue resume session-id remote-control))
                      (buffer (car buf-and-proc))
                      (process (cdr buf-and-proc)))
                 
@@ -877,6 +890,16 @@ With prefix ARG (\\[universal-argument]), prompt for the working directory."
   (antigravity-cli-ide--start-session nil nil directory))
 
 ;;;###autoload
+(defun antigravity-cli-ide-start-with-remote-control (&optional arg)
+  "Run Antigravity CLI in a terminal with Remote Control enabled.
+With prefix ARG (\\[universal-argument]), prompt for the working directory."
+  (interactive "P")
+  (let ((dir (when arg
+               (read-directory-name "Start Antigravity in directory: "
+                                    default-directory default-directory t))))
+    (antigravity-cli-ide--start-session nil nil dir t)))
+
+;;;###autoload
 (defun antigravity-cli-ide-check-status ()
   "Check status of Antigravity CLI."
   (interactive)
@@ -884,6 +907,62 @@ With prefix ARG (\\[universal-argument]), prompt for the working directory."
   (if antigravity-cli-ide--cli-available
       (antigravity-cli-ide-log "Antigravity CLI is available and operational")
     (antigravity-cli-ide-log "Antigravity CLI is not found or not operational")))
+
+;;;###autoload
+(defun antigravity-cli-ide-remote-control-status ()
+  "Show the status of the Antigravity remote-control background daemon."
+  (interactive)
+  (unless (antigravity-cli-ide--ensure-cli)
+    (user-error "Antigravity CLI ('agy' executable) not found in PATH"))
+  (let* ((cli (or (executable-find antigravity-cli-ide-cli-path)
+                  antigravity-cli-ide-cli-path))
+         (output
+          (with-temp-buffer
+            (call-process cli nil t nil "remote-control" "status")
+            (string-trim (buffer-string)))))
+    (with-output-to-temp-buffer "*Antigravity Remote Control Status*"
+      (princ "Antigravity Remote Control Daemon Status\n")
+      (princ "=======================================\n\n")
+      (princ output)
+      (princ "\n"))
+    (antigravity-cli-ide-log "Remote Control Status: %s"
+                             (car (split-string output "\n")))))
+
+;;;###autoload
+(defun antigravity-cli-ide-remote-control-daemon-start (&optional name)
+  "Start the Antigravity remote-control background daemon.
+With prefix arg or interactive prompt, NAME specifies the instance name."
+  (interactive
+   (list (when current-prefix-arg
+           (read-string "Instance name (leave empty for auto): "))))
+  (unless (antigravity-cli-ide--ensure-cli)
+    (user-error "Antigravity CLI ('agy' executable) not found in PATH"))
+  (let* ((cli (or (executable-find antigravity-cli-ide-cli-path)
+                  antigravity-cli-ide-cli-path))
+         (args (append (list "remote-control" "start")
+                       (when (and name (not (string-empty-p name)))
+                         (list "--name" name))))
+         (output
+          (with-temp-buffer
+            (apply #'call-process cli nil t nil args)
+            (string-trim (buffer-string)))))
+    (message "%s" (if (string-empty-p output) "Remote control daemon started" output))
+    (antigravity-cli-ide-log "Started remote-control daemon: %s" output)))
+
+;;;###autoload
+(defun antigravity-cli-ide-remote-control-daemon-stop ()
+  "Stop the Antigravity remote-control background daemon."
+  (interactive)
+  (unless (antigravity-cli-ide--ensure-cli)
+    (user-error "Antigravity CLI ('agy' executable) not found in PATH"))
+  (let* ((cli (or (executable-find antigravity-cli-ide-cli-path)
+                  antigravity-cli-ide-cli-path))
+         (output
+          (with-temp-buffer
+            (call-process cli nil t nil "remote-control" "stop")
+            (string-trim (buffer-string)))))
+    (message "%s" (if (string-empty-p output) "Remote control daemon stopped" output))
+    (antigravity-cli-ide-log "Stopped remote-control daemon: %s" output)))
 
 ;;;###autoload
 (defun antigravity-cli-ide-stop (&optional dir-override)
@@ -992,6 +1071,27 @@ pre-fills the prompt input with the active companion file context."
               (sit-for 0.1)
               (antigravity-cli-ide--terminal-send-return)
               (setq antigravity-cli-ide--context-inserted-for-turn nil))))
+      (user-error "No active session"))))
+
+;;;###autoload
+(defun antigravity-cli-ide-remote-control-toggle (&optional arg)
+  "Toggle Remote Control in the active Antigravity CLI session.
+Sends `/remote-control' to the active terminal.
+With positive prefix ARG, send `/remote-control on'.
+With negative or zero prefix ARG, send `/remote-control off'."
+  (interactive "P")
+  (let* ((working-dir (antigravity-cli-ide--get-session-directory))
+         (buffer-name (antigravity-cli-ide--get-buffer-name working-dir)))
+    (if-let* ((buffer (get-buffer buffer-name)))
+        (let ((cmd (cond
+                    ((null arg) "/remote-control")
+                    ((> (prefix-numeric-value arg) 0) "/remote-control on")
+                    (t "/remote-control off"))))
+          (with-current-buffer buffer
+            (antigravity-cli-ide--terminal-send-string cmd)
+            (sit-for 0.1)
+            (antigravity-cli-ide--terminal-send-return))
+          (antigravity-cli-ide-log "Sent `%s' to active Antigravity session" cmd))
       (user-error "No active session"))))
 
 ;;;###autoload

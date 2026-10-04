@@ -67,12 +67,12 @@ Antigravity CLI communicates with external tools using standard JSON-RPC over st
 
 | File | Responsibility |
 |---|---|
-| [`antigravity-cli-ide.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide.el) | **Main entry point**: Session orchestration, CLI executable resolution, terminal buffer lifecycles, dedicated side-window layout, and companion buffer tracking. |
+| [`antigravity-cli-ide.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide.el) | **Main entry point**: Session orchestration, CLI executable resolution, terminal buffer lifecycles, dedicated side-window layout, companion buffer tracking, and Remote Control integration. |
 | [`antigravity-cli-ide-mcp.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-mcp.el) | **Core MCP TCP engine**: Socket lifecycle management, port selection, JSON-RPC streaming/parsing, session registry, and dynamic `mcp_config.json` updates. |
 | [`antigravity-cli-ide-mcp-handlers.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-mcp-handlers.el) | **MCP Tool Implementations**: Protocol handlers for `openFile`, `getDiagnostics`, `openDiff` (interactive Ediff), `getCurrentBufferContext`, and Elisp evaluation. |
 | [`antigravity-cli-ide-emacs-tools.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-emacs-tools.el) | **Editor Context Tools**: Exposes project boundaries, identifier references (`xref`), symbol tables (`imenu`), and Tree-sitter AST queries to the assistant. |
 | [`antigravity-cli-ide-diagnostics.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-diagnostics.el) | **Compiler Diagnostics**: Unifies `flymake` and `flycheck` diagnostic data, transforming them into standard LSP/VS Code diagnostic structures. |
-| [`antigravity-cli-ide-transient.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-transient.el) | **Interactive UI**: The `transient` menu system (`C-c g` / `antigravity-cli-ide-menu`), configuration submenu, and diagnostics panel. |
+| [`antigravity-cli-ide-transient.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-transient.el) | **Interactive UI**: The `transient` menu system (`C-c g` / `antigravity-cli-ide-menu`), configuration submenu, Remote Control submenu, and diagnostics panel. |
 | [`antigravity-cli-ide-debug.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-debug.el) | **Observability**: Structured logging to the `*antigravity-cli-ide-debug*` buffer. |
 | [`antigravity-cli-ide-mcp-server.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-mcp-server.el) | **MCP Tools Registry**: Tool declarations and session execution context. |
 | [`antigravity-cli-ide-tests.el`](file:///home/ihr/projects/agy-cli-ide/antigravity-cli-ide-tests.el) | **Automated Tests**: ERT test suite validating command generation, session lifecycle, config serialization, buffer naming, and diagnostics mapping. |
